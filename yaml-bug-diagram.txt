@@ -1,0 +1,195 @@
+
+YAML 1.2 Spec Bug: Rule 78 (l-comment) — State Diagram
+════════════════════════════════════════════════════════
+
+Input: "a:\n  b: 1\n  c: 2\n"
+        ──┬─┬──┬┬──────────
+          │ │  ││
+          │ │  │└─ indentation (2 spaces) ← THIS GETS EATEN
+          │ │  └── newline
+          │ └───── colon (value separator)
+          └─────── key
+
+
+After consuming "a:", parser is here:
+                                                          
+  ╔═══════════════════════════════════════════════════╗
+  ║  Input:  \n  b: 1\n  c: 2\n                      ║
+  ║          ▲                                        ║
+  ║          │ pos=2, col=2                           ║
+  ╚═══════════════════════════════════════════════════╝
+                        │
+                        ▼
+  ┌─────────────────────────────────────────────┐
+  │ Rule 194: c-l-block-map-implicit-value      │
+  │ Try Alt:                                    │
+  │   1. s-l+block-node  (nested structure?)    │
+  │   2. e-node          (empty/null value)     │
+  └────────────────────┬────────────────────────┘
+                       │ try path 1
+                       ▼
+  ┌─────────────────────────────────────────────┐
+  │ Rule 200: s-l+block-collection              │
+  │ (Seq (Opt props) s-l-comments (Alt seq map))│
+  └────────────────────┬────────────────────────┘
+                       │
+                       ▼
+  ┌─────────────────────────────────────────────┐
+  │ Rule 79: s-l-comments                       │
+  │ (Seq (Alt s-b-comment EMPTY) Star(l-comment)│
+  └────────────────────┬────────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+          ▼                         │
+  ┌───────────────────┐             │
+  │ s-b-comment       │             │
+  │ consumes: \n      │             │
+  │ pos: 2 → 3       │             │
+  │                   │             │
+  │ Input now:        │             │
+  │ "  b: 1\n  c: 2" │             │
+  │  ▲                │             │
+  │  pos=3, col=0     │             │
+  └────────┬──────────┘             │
+           │                        │
+           ▼                        │
+  ┌────────────────────────────┐    │
+  │ Star(l-comment)            │    │
+  │                            │    │
+  │ ┌────────────────────────┐ │    │
+  │ │ l-comment attempt 1    │ │    │
+  │ │                        │ │    │
+  │ │ Input: "  b: 1\n..."  │ │    │
+  │ │         ▲  col=0       │ │    │
+  │ └────────┬───────────────┘ │    │
+  │          │                 │    │
+  └──────────┼─────────────────┘    │
+             │                      │
+             ▼                      │
+                                    │
+ ══════════════════════════════     │
+   BUGGY PATH        FIXED PATH    │
+ ══════════════════════════════     │
+        │                 │         │
+        ▼                 ▼         │
+ ┌──────────────┐  ┌──────────────┐│
+ │ s-sep-in-line│  │ s-sep-in-line││
+ │              │  │              ││
+ │ (Plus WHITE) │  │ (Plus WHITE) ││
+ │ eats "  "    │  │ eats "  "    ││
+ │ 2 spaces!    │  │ 2 spaces!    ││
+ │              │  │              ││
+ │ pos: 3 → 5  │  │ pos: 3 → 5  ││
+ └──────┬───────┘  └──────┬───────┘│
+        │                 │         │
+        ▼                 ▼         │
+ ┌──────────────┐  ┌──────────────┐│
+ │ (Opt comment)│  │ (Opt comment)││
+ │ 'b' ≠ '#'   │  │ 'b' ≠ '#'   ││
+ │ skip         │  │ skip         ││
+ └──────┬───────┘  └──────┬───────┘│
+        │                 │         │
+        ▼                 ▼         │
+ ┌──────────────┐  ┌──────────────┐│
+ │ b-comment    │  │ b-non-content││
+ │              │  │              ││
+ │ = (Alt       │  │ = newline    ││
+ │   b-non-cont │  │              ││
+ │   EMPTY)     │  │ got 'b'     ││
+ │              │  │              ││
+ │ b-non-content│  │  ╔═════════╗ ││
+ │ needs \n     │  │  ║  FAILS  ║ ││
+ │ got 'b' FAIL│  │  ╚═════════╝ ││
+ │              │  │              ││
+ │ ┌──────────┐│  │ l-comment    ││
+ │ │  EMPTY   ││  │ FAILS        ││
+ │ │ SUCCEEDS!││  │              ││
+ │ └──────────┘│  │ Star stops   ││
+ │              │  │ with 0 match││
+ └──────┬───────┘  └──────┬───────┘│
+        │                 │         │
+        │    ┌────────────┘         │
+        │    │                      │
+        ▼    ▼                      │
+                                    │
+ ════════════════════════════════   │
+       AFTER s-l-comments           │
+ ════════════════════════════════   │
+                                    │
+   BUGGY                  FIXED     │
+   consumed: \n + "  "    consumed: \n only
+   pos=5, col=2           pos=3, col=0
+                                    │
+   Input: "b: 1\n..."    Input: "  b: 1\n..."
+           ▲                       ▲
+           no indent!              indent preserved!
+        │                 │
+        ▼                 ▼
+ ┌──────────────┐  ┌──────────────┐
+ │ l+block-     │  │ l+block-     │
+ │ mapping(0)   │  │ mapping(0)   │
+ │              │  │              │
+ │ Detect-Indent│  │ Detect-Indent│
+ │ sees "b:"    │  │ sees "  b:"  │
+ │ spaces=0     │  │ spaces=2     │
+ │ m=max(1,0)=1 │  │ m=max(1,2)=2│
+ │              │  │              │
+ │ s-indent(1)  │  │ s-indent(2)  │
+ │ need 1 space │  │ need 2 spaces│
+ │ got 'b'      │  │ got '  '     │
+ │              │  │              │
+ │  ╔═════════╗ │  │  ╔═════════╗ │
+ │  ║  FAILS  ║ │  │  ║ MATCHES ║ │
+ │  ╚═════════╝ │  │  ╚═════════╝ │
+ └──────┬───────┘  └──────┬───────┘
+        │                 │
+        ▼                 ▼
+ ┌──────────────┐  ┌──────────────────────┐
+ │ s-l+block-   │  │ Parses nested:       │
+ │ node FAILS   │  │                      │
+ │              │  │ b: 1                  │
+ │ Fall through │  │ c: 2                 │
+ │ to e-node    │  │                      │
+ │              │  │ as children of 'a'    │
+ │ a → NULL     │  │                      │
+ └──────┬───────┘  │ a → {b: 1, c: 2}     │
+        │          │                      │
+        ▼          │  ╔═══════════════╗   │
+ ┌──────────────┐  │  ║   CORRECT!    ║   │
+ │ Outer loop   │  │  ╚═══════════════╝   │
+ │ continues    │  └──────────────────────┘
+ │              │
+ │ Parses b: 1  │
+ │ as SIBLING   │
+ │ Parses c: 2  │
+ │ as SIBLING   │
+ │              │
+ │ Result:      │
+ │ {a: null,    │
+ │  b: 1,       │
+ │  c: 2}       │
+ │  FLAT!       │
+ │              │
+ │ ╔══════════╗ │
+ │ ║  WRONG!  ║ │
+ │ ╚══════════╝ │
+ └──────────────┘
+
+
+ THE FIX:
+ ════════
+ Rule 78, one symbol change:
+
+   BEFORE (buggy):  l-comment ::= s-separate-in-line c-nb-comment-text? b-comment
+                                                                         ─────────
+                                                                    (Alt newline EMPTY)
+                                                                                 ─────
+                                                                                 ▲ BUG
+
+   AFTER (fixed):   l-comment ::= s-separate-in-line c-nb-comment-text? b-non-content
+                                                                         ─────────────
+                                                                         newline only
+                                                                         ─────────────
+                                                                              ✓ FIX
+
+ In the spec since 2009. Found 2026. By running the grammar.
