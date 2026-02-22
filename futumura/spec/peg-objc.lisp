@@ -339,3 +339,148 @@ static void printAst(YAMLNode *node, int depth) {
     }
     return 0;
 }")
+
+;;; ── Concern Vocab ──
+
+(let ((cv (make-hash-table :test 'equal)))
+  (setf (gethash "value-type-decl" cv)
+"typedef enum { YNull, YBool, YInt, YFloat, YStr, YMap, YSeq } YamlTag;
+
+@interface YamlValue : NSObject { @public
+    YamlTag tag;
+    BOOL b;
+    int64_t i;
+    double f;
+    NSString *s;
+    NSMutableDictionary *m;
+    NSMutableArray *v;
+}
++ (instancetype)nullVal;
++ (instancetype)boolVal:(BOOL)b;
++ (instancetype)intVal:(int64_t)i;
++ (instancetype)floatVal:(double)f;
++ (instancetype)strVal:(NSString *)s;
++ (instancetype)mapVal:(NSMutableDictionary *)m;
++ (instancetype)seqVal:(NSMutableArray *)v;
+@end
+
+@implementation YamlValue
++ (instancetype)nullVal { YamlValue *y=[YamlValue new]; y->tag=YNull; return y; }
++ (instancetype)boolVal:(BOOL)b { YamlValue *y=[YamlValue new]; y->tag=YBool; y->b=b; return y; }
++ (instancetype)intVal:(int64_t)i { YamlValue *y=[YamlValue new]; y->tag=YInt; y->i=i; return y; }
++ (instancetype)floatVal:(double)f { YamlValue *y=[YamlValue new]; y->tag=YFloat; y->f=f; return y; }
++ (instancetype)strVal:(NSString *)s { YamlValue *y=[YamlValue new]; y->tag=YStr; y->s=s; return y; }
++ (instancetype)mapVal:(NSMutableDictionary *)m { YamlValue *y=[YamlValue new]; y->tag=YMap; y->m=m; return y; }
++ (instancetype)seqVal:(NSMutableArray *)v { YamlValue *y=[YamlValue new]; y->tag=YSeq; y->v=v; return y; }
+@end")
+
+  (setf (gethash "accessors" cv)
+"static YamlValue* yGet(YamlValue *y, NSString *key) {
+    if (y->tag == YMap) { YamlValue *r = y->m[key]; if (r) return r; }
+    return [YamlValue nullVal];
+}
+static YamlValue* yAt(YamlValue *y, NSUInteger idx) {
+    if (y->tag == YSeq && idx < y->v.count) return y->v[idx];
+    return [YamlValue nullVal];
+}
+static NSString* yStr(YamlValue *y) { return y->tag == YStr ? y->s : @\"\"; }")
+
+  (setf (gethash "coerce-fn" cv)
+"static YamlValue* coerceScalar(NSString *s) {
+    if ([s isEqualToString:@\"null\"]||[s isEqualToString:@\"Null\"]||[s isEqualToString:@\"NULL\"]||[s isEqualToString:@\"~\"]||s.length==0)
+        return [YamlValue nullVal];
+    if ([s isEqualToString:@\"true\"]||[s isEqualToString:@\"True\"]||[s isEqualToString:@\"TRUE\"])
+        return [YamlValue boolVal:YES];
+    if ([s isEqualToString:@\"false\"]||[s isEqualToString:@\"False\"]||[s isEqualToString:@\"FALSE\"])
+        return [YamlValue boolVal:NO];
+    if ([s isEqualToString:@\".inf\"]||[s isEqualToString:@\".Inf\"]||[s isEqualToString:@\".INF\"]||[s isEqualToString:@\"+.inf\"])
+        return [YamlValue floatVal:INFINITY];
+    if ([s isEqualToString:@\"-.inf\"]||[s isEqualToString:@\"-.Inf\"]||[s isEqualToString:@\"-.INF\"])
+        return [YamlValue floatVal:-INFINITY];
+    if ([s isEqualToString:@\".nan\"]||[s isEqualToString:@\".NaN\"]||[s isEqualToString:@\".NAN\"])
+        return [YamlValue floatVal:NAN];
+    NSScanner *sc = [NSScanner scannerWithString:s];
+    long long ll; if ([sc scanLongLong:&ll] && sc.isAtEnd) return [YamlValue intVal:(int64_t)ll];
+    if (s.length > 2 && [s hasPrefix:@\"0x\"]) {
+        unsigned long long ull;
+        sc = [NSScanner scannerWithString:s];
+        if ([sc scanHexLongLong:&ull] && sc.isAtEnd) return [YamlValue intVal:(int64_t)ull];
+    }
+    sc = [NSScanner scannerWithString:s];
+    double d; if ([sc scanDouble:&d] && sc.isAtEnd) return [YamlValue floatVal:d];
+    return [YamlValue strVal:s];
+}")
+
+  (setf (gethash "converter-decl" cv)
+"@interface YamlConverter : NSObject { @public
+    NSMutableDictionary *anchors;
+}
+- (YamlValue *)convert:(YAMLNode *)node;
+@end
+
+@implementation YamlConverter
+- (instancetype)init { self=[super init]; anchors=[NSMutableDictionary dictionary]; return self; }")
+
+  (setf (gethash "convert-fn" cv)
+"- (YamlValue *)convert:(YAMLNode *)node {
+    if (!node) return [YamlValue nullVal];
+    if (node->isLeaf) return coerceScalar(node->text);
+    NSString *t = node->type;
+    if ([t isEqualToString:@\"ANCHOR\"]) {
+        NSString *name = nil;
+        YamlValue *val = [YamlValue nullVal];
+        for (YAMLNode *ch in node->children) {
+            if (ch->isLeaf && !name) name = ch->text;
+            else val = [self convert:ch];
+        }
+        if (name) anchors[name] = val;
+        return val;
+    }
+    if ([t isEqualToString:@\"ALIAS\"]) {
+        for (YAMLNode *ch in node->children) {
+            if (ch->isLeaf && anchors[ch->text]) return anchors[ch->text];
+        }
+        return [YamlValue nullVal];
+    }
+    if ([t isEqualToString:@\"MAPPING\"]) {
+        NSMutableDictionary *m = [NSMutableDictionary dictionary];
+        for (YAMLNode *ch in node->children) {
+            if ([ch->type isEqualToString:@\"PAIR\"] && ch->children.count >= 2) {
+                YamlValue *key = [self convert:ch->children[0]];
+                YamlValue *val = [self convert:ch->children[1]];
+                if ([yStr(key) isEqualToString:@\"<<\"] && val->tag == YMap) {
+                    for (NSString *mk in val->m) { if (!m[mk]) m[mk] = val->m[mk]; }
+                } else { m[yStr(key)] = val; }
+            }
+        }
+        return [YamlValue mapVal:m];
+    }
+    if ([t isEqualToString:@\"SEQUENCE\"]) {
+        NSMutableArray *seq = [NSMutableArray array];
+        for (YAMLNode *ch in node->children) [seq addObject:[self convert:ch]];
+        return [YamlValue seqVal:seq];
+    }
+    if ([t isEqualToString:@\"DOC\"] || [t isEqualToString:@\"STREAM\"]) {
+        if (node->children.count == 1) return [self convert:node->children[0]];
+        NSMutableArray *docs = [NSMutableArray array];
+        for (YAMLNode *ch in node->children) [docs addObject:[self convert:ch]];
+        return docs.count == 1 ? docs[0] : [YamlValue seqVal:docs];
+    }
+    if ([t isEqualToString:@\"PAIR\"] && node->children.count >= 2)
+        return [self convert:node->children[1]];
+    if (node->children.count == 1) return [self convert:node->children[0]];
+    NSMutableArray *items = [NSMutableArray array];
+    for (YAMLNode *ch in node->children) [items addObject:[self convert:ch]];
+    return [YamlValue seqVal:items];
+}
+@end")
+
+  (setf (gethash "load-fn" cv)
+"static YamlValue* yamlLoad(NSString *text) {
+    Input inp = mkInput(text);
+    Res r = l_yaml_stream(inp);
+    if (r->failed) return [YamlValue nullVal];
+    YamlConverter *conv = [YamlConverter new];
+    return [conv convert:r->ast];
+}")
+  (def-tgt "cv" cv))

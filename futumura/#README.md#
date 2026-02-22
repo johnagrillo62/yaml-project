@@ -1,0 +1,59 @@
+# YAML Parsers for Every Language
+
+## YAML Runs the World
+
+YAML is the configuration language of modern
+infrastructure. Kubernetes, Docker Compose, Ansible, Helm, GitHub
+Actions, GitLab CI, CloudFormation, Spring Boot — every cloud
+deployment, every CI pipeline, every container orchestration tool
+parses YAML.
+
+As more systems depend on accurate configuration parsing — from edge
+deployments to multi-cloud orchestration to AI training pipelines —
+the cost of parser inconsistencies grows. A subtle difference in how
+two parsers handle the same YAML can mean different behavior in
+staging and production, different results across platforms, different
+interpretations of the same intent.
+
+The ecosystem depends on a handful of parser libraries, most written
+over a decade ago by dedicated individuals and small teams who put in
+serious work translating the YAML specification into working
+code. Libraries like libyaml, PyYAML, SnakeYAML, go-yaml, and yaml-cpp
+have been workhorses — reliable, battle-tested, and foundational to
+the infrastructure everyone depends on.
+
+But maintaining a parser is a significant ongoing commitment that falls on very few shoulders. And the number of languages and platforms that need YAML support keeps growing.
+
+## The Problem
+
+Each YAML parser is an independent implementation. Each was written by
+reading the YAML 1.2 specification and translating it into a specific
+language. This means:
+
+- A bug fix in one parser doesn't help the others
+- A new language or platform needs a new parser written from scratch
+- Behavioral consistency across languages requires cross-project coordination
+- The maintenance burden multiplies with every implementation
+
+## An Experimental Approach
+
+I developed an experimental parsing technique that produces correct, consistent YAML parsers across languages and platforms.
+
+In the process, I identified a latent issue in the YAML
+specification's comment-handling rules that has been present since
+2009, masked by how hand-coded parsers interpret the prose differently
+from what the formal grammar actually says.
+
+## Properties
+
+**One fix, every language.** A correction to the parser logic propagates to every language automatically.
+
+**New languages are additive.** Adding a language doesn't require writing a parser from scratch.
+
+**Behavioral identity.** Every parser produces identical results from a single source of truth.
+
+**Spec fidelity.** The technique surfaces specification bugs that are invisible to hand-coded implementations.
+
+**Testing oracle.** When every parser agrees on every input, you have a ground truth. When a hand-coded parser disagrees, you know exactly where and why. The parsers test each other.
+
+

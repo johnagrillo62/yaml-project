@@ -328,3 +328,106 @@ def print_ast(node, depth=0):
     else:
         print(f'FAIL @{r.rest.pos}: {r.err}', file=sys.stderr)
         sys.exit(1)")
+
+;;; ── Concerns (native API layer) ──
+
+(load "emit/yaml-concerns.lisp")
+(def-tgt "yaml-concerns" *yaml-concerns-python*)
+
+;;; ── Concern Vocab ──
+
+(let ((cv (make-hash-table :test 'equal)))
+  ;; Python uses native types — no value type decl needed
+  (setf (gethash "value-type-decl" cv) "")
+  ;; No accessors needed — native dict/list
+  ;; Coerce function
+  (setf (gethash "coerce-fn" cv)
+"import math
+
+def coerce_scalar(s):
+    if s in ('null', 'Null', 'NULL', '~', ''):
+        return None
+    if s in ('true', 'True', 'TRUE'):
+        return True
+    if s in ('false', 'False', 'FALSE'):
+        return False
+    if s in ('.inf', '.Inf', '.INF', '+.inf'):
+        return float('inf')
+    if s in ('-.inf', '-.Inf', '-.INF'):
+        return float('-inf')
+    if s in ('.nan', '.NaN', '.NAN'):
+        return float('nan')
+    try:
+        return int(s, 0)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        pass
+    return s")
+  ;; Converter class
+  (setf (gethash "converter-decl" cv)
+"class Converter:
+    def __init__(self):
+        self.anchors = {}")
+  ;; Convert function
+  (setf (gethash "convert-fn" cv)
+"    def convert(self, node):
+        if node is None:
+            return None
+        if node.is_leaf:
+            return coerce_scalar(node.text)
+        t = node.type
+        if t == 'ANCHOR':
+            name = None
+            val = None
+            for c in node.children:
+                if c.is_leaf and name is None:
+                    name = c.text
+                else:
+                    val = self.convert(c)
+            if name:
+                self.anchors[name] = val
+            return val
+        if t == 'ALIAS':
+            for c in node.children:
+                if c.is_leaf and c.text in self.anchors:
+                    return self.anchors[c.text]
+            return None
+        if t == 'MAPPING':
+            m = {}
+            for c in node.children:
+                if c.type == 'PAIR' and len(c.children) >= 2:
+                    key = self.convert(c.children[0])
+                    val = self.convert(c.children[1])
+                    if key == '<<' and isinstance(val, dict):
+                        for mk, mv in val.items():
+                            if mk not in m:
+                                m[mk] = mv
+                    else:
+                        m[str(key) if key is not None else ''] = val
+            return m
+        if t == 'SEQUENCE':
+            return [self.convert(c) for c in node.children]
+        if t in ('DOC', 'STREAM'):
+            if len(node.children) == 1:
+                return self.convert(node.children[0])
+            docs = [self.convert(c) for c in node.children]
+            return docs[0] if len(docs) == 1 else docs
+        if len(node.children) == 1:
+            return self.convert(node.children[0])
+        return [self.convert(c) for c in node.children]")
+  ;; Load function
+  (setf (gethash "load-fn" cv)
+"def load(text):
+    inp = Input(text, 0, 1, 0)
+    r = l_yaml_stream(inp)
+    if r.failed:
+        return None
+    return Converter().convert(r.ast)
+
+def load_file(path):
+    with open(path) as f:
+        return load(f.read())")
+  (def-tgt "cv" cv))

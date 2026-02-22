@@ -113,6 +113,7 @@
 #include <string_view>
 #include <vector>
 #include <functional>
+#include <map>
 #include <unordered_map>
 #include <memory>
 #include <cstdint>
@@ -292,9 +293,9 @@ void print_ast(const AST& n, int d=0) {
     for(int i=0;i<d;i++) std::cout<<\"  \";
     if(n->type==\"SCALAR\") std::cout<<\"SCALAR: \\\"\"<<n->text<<\"\\\"\"<<std::endl;
     else { std::cout<<n->type<<std::endl; for(auto& c:n->children) print_ast(c,d+1); }
-}
+}")
 
-} // namespace yaml")
+(def-tgt "namespace-close" "} // namespace yaml")
 
 ;;; ── Main ──
 
@@ -305,7 +306,31 @@ void print_ast(const AST& n, int d=0) {
         std::ostringstream ss; ss<<f.rdbuf(); text=ss.str(); }
     else { std::ostringstream ss; ss<<std::cin.rdbuf(); text=ss.str(); }
     auto result=yaml::parse(text);
-    if(result.success) { std::cout<<\"OK: \"<<result.pos<<\" chars\"<<std::endl; yaml::print_ast(result.ast); }
-    else { std::cerr<<\"FAIL @\"<<result.pos<<\": \"<<result.error<<std::endl; return 1; }
+    if(!result.success) { std::cerr<<\"FAIL @\"<<result.pos<<\": \"<<result.error<<std::endl; return 1; }
+    std::cout<<\"OK: \"<<result.pos<<\" chars\"<<std::endl;
+    yaml::print_ast(result.ast);
+    // Also demonstrate native API
+    auto val = yaml::load(text);
+    std::cout<<\"\\n── Native API ──\"<<std::endl;
+    if (val.tag == yaml::YamlValue::Map) {
+        for (auto& [k,v] : val.m) {
+            std::cout << k << \": \";
+            switch(v.tag) {
+                case yaml::YamlValue::Null:  std::cout<<\"null\"; break;
+                case yaml::YamlValue::Bool:  std::cout<<(v.b?\"true\":\"false\"); break;
+                case yaml::YamlValue::Int:   std::cout<<v.i; break;
+                case yaml::YamlValue::Float: std::cout<<v.f; break;
+                case yaml::YamlValue::Str:   std::cout<<'\"'<<v.s<<'\"'; break;
+                case yaml::YamlValue::Map:   std::cout<<\"{map, \"<<v.m.size()<<\" keys}\"; break;
+                case yaml::YamlValue::Seq:   std::cout<<\"[seq, \"<<v.v.size()<<\" items]\"; break;
+            }
+            std::cout << std::endl;
+        }
+    }
     return 0;
 }")
+
+;;; ── Concerns (native API layer) ──
+
+(load "emit/yaml-concerns.lisp")
+(def-tgt "yaml-concerns" *yaml-concerns-cpp*)

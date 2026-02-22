@@ -110,7 +110,9 @@ package main
 import (
 	\"fmt\"
 	\"io\"
+	\"math\"
 	\"os\"
+	\"strconv\"
 	\"strings\"
 )")
 
@@ -374,3 +376,135 @@ func printAst(node *Ast, depth int) {
 		os.Exit(1)
 	}
 }")
+
+;;; ── Concerns (native API layer) ──
+
+(load "emit/yaml-concerns.lisp")
+(def-tgt "yaml-concerns" *yaml-concerns-go*)
+
+;;; ── Concern Vocab ──
+
+(load "emit/yaml-concerns.lisp")
+(let ((cv (make-hash-table :test 'equal))
+      (full *yaml-concerns-go*))
+  ;; For now, put the whole thing in convert-fn and leave other keys empty
+  ;; The concern compiler emits them in order; we just need to distribute
+  (setf (gethash "value-type-decl" cv)
+"type YamlTag int
+const (
+    YNull YamlTag = iota
+    YBool
+    YInt
+    YFloat
+    YStr
+    YMap
+    YSeq
+)
+
+type YamlValue struct {
+    Tag YamlTag
+    B   bool
+    I   int64
+    F   float64
+    S   string
+    M   map[string]*YamlValue
+    V   []*YamlValue
+}
+
+func NullVal() *YamlValue { return &YamlValue{Tag: YNull} }
+func BoolVal(b bool) *YamlValue { return &YamlValue{Tag: YBool, B: b} }
+func IntVal(i int64) *YamlValue { return &YamlValue{Tag: YInt, I: i} }
+func FloatVal(f float64) *YamlValue { return &YamlValue{Tag: YFloat, F: f} }
+func StrVal(s string) *YamlValue { return &YamlValue{Tag: YStr, S: s} }
+func MapVal(m map[string]*YamlValue) *YamlValue { return &YamlValue{Tag: YMap, M: m} }
+func SeqVal(v []*YamlValue) *YamlValue { return &YamlValue{Tag: YSeq, V: v} }")
+  (setf (gethash "accessors" cv)
+"func (y *YamlValue) Get(key string) *YamlValue {
+    if y.Tag == YMap { if v, ok := y.M[key]; ok { return v } }
+    return NullVal()
+}
+func (y *YamlValue) At(i int) *YamlValue {
+    if y.Tag == YSeq && i < len(y.V) { return y.V[i] }
+    return NullVal()
+}
+func (y *YamlValue) Str() string { if y.Tag == YStr { return y.S }; return \"\" }
+func (y *YamlValue) Size() int {
+    if y.Tag == YMap { return len(y.M) }; if y.Tag == YSeq { return len(y.V) }; return 0
+}")
+  (setf (gethash "coerce-fn" cv)
+"func coerceScalar(s string) *YamlValue {
+    switch s {
+    case \"null\", \"Null\", \"NULL\", \"~\", \"\":
+        return NullVal()
+    case \"true\", \"True\", \"TRUE\":
+        return BoolVal(true)
+    case \"false\", \"False\", \"FALSE\":
+        return BoolVal(false)
+    case \".inf\", \".Inf\", \".INF\", \"+.inf\":
+        return FloatVal(math.Inf(1))
+    case \"-.inf\", \"-.Inf\", \"-.INF\":
+        return FloatVal(math.Inf(-1))
+    case \".nan\", \".NaN\", \".NAN\":
+        return FloatVal(math.NaN())
+    }
+    if i, err := strconv.ParseInt(s, 0, 64); err == nil { return IntVal(i) }
+    if f, err := strconv.ParseFloat(s, 64); err == nil { return FloatVal(f) }
+    return StrVal(s)
+}")
+  (setf (gethash "converter-decl" cv)
+"type yamlConverter struct { anchors map[string]*YamlValue }")
+  (setf (gethash "convert-fn" cv)
+"func (c *yamlConverter) convert(node *Ast) *YamlValue {
+    if node == nil { return NullVal() }
+    if node.isLeaf { return coerceScalar(node.text) }
+    switch node.tag {
+    case \"ANCHOR\":
+        var name string
+        var val *YamlValue = NullVal()
+        for _, ch := range node.children {
+            if ch.isLeaf && name == \"\" { name = ch.text } else { val = c.convert(ch) }
+        }
+        if name != \"\" { c.anchors[name] = val }
+        return val
+    case \"ALIAS\":
+        for _, ch := range node.children {
+            if ch.isLeaf { if v, ok := c.anchors[ch.text]; ok { return v } }
+        }
+        return NullVal()
+    case \"MAPPING\":
+        m := make(map[string]*YamlValue)
+        for _, ch := range node.children {
+            if ch.tag == \"PAIR\" && len(ch.children) >= 2 {
+                key := c.convert(ch.children[0])
+                val := c.convert(ch.children[1])
+                if key.Tag == YStr && key.S == \"<<\" && val.Tag == YMap {
+                    for mk, mv := range val.M { if _, exists := m[mk]; !exists { m[mk] = mv } }
+                } else { m[key.Str()] = val }
+            }
+        }
+        return MapVal(m)
+    case \"SEQUENCE\":
+        var seq []*YamlValue
+        for _, ch := range node.children { seq = append(seq, c.convert(ch)) }
+        return SeqVal(seq)
+    case \"DOC\", \"STREAM\":
+        if len(node.children) == 1 { return c.convert(node.children[0]) }
+        var docs []*YamlValue
+        for _, ch := range node.children { docs = append(docs, c.convert(ch)) }
+        if len(docs) == 1 { return docs[0] }
+        return SeqVal(docs)
+    }
+    if len(node.children) == 1 { return c.convert(node.children[0]) }
+    var items []*YamlValue
+    for _, ch := range node.children { items = append(items, c.convert(ch)) }
+    return SeqVal(items)
+}")
+  (setf (gethash "load-fn" cv)
+"func Load(text string) *YamlValue {
+    inp := Input{src: &text, pos: 0, line: 1, col: 0}
+    r := l_yaml_stream(inp)
+    if r.fail { return NullVal() }
+    c := &yamlConverter{anchors: make(map[string]*YamlValue)}
+    return c.convert(r.ast)
+}")
+  (def-tgt "cv" cv))

@@ -319,3 +319,8 @@ fn print_ast(node: &Ast, depth: usize) {
     if !r.fail { println!(\"OK: {} chars\", r.rest.pos); if let Some(a)=&r.ast { print_ast(a,0); } }
     else { eprintln!(\"FAIL @{}: {}\", r.rest.pos, r.err); std::process::exit(1); }
 }")
+
+;;; ── Concerns (native API layer) ──
+
+(load "emit/yaml-concerns.lisp")
+(def-tgt "yaml-concerns" *yaml-concerns-rust*)

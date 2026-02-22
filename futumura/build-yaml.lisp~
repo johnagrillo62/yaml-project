@@ -1,0 +1,95 @@
+;;;; build-yaml.lisp — Project yaml-grammar.scm → all target languages
+;;;;
+;;;; Usage:
+;;;;   cd futumura
+;;;;   sbcl --load build-yaml.lisp --quit
+;;;;
+;;;; Loads the evaluator once, then runs each emitter against the grammar.
+;;;; Direct emitters: emit-yaml-{cpp,java,rust}.lisp
+;;;; PEG emitters:    peg-{go,python,objc,cpp,rust}.lisp → emit-yaml-peg.lisp
+
+(load "eval/yaml-eval.lisp")
+
+(in-package #:yaml-eval)
+
+;;; Silence redefinition and forward-reference warnings
+(declaim (sb-ext:muffle-conditions style-warning warning))
+
+;;; Shared formatting (ml-join, maybe-ml)
+(load "emit/emit-format.lisp")
+
+(defvar *grammar-path* "grammar/yaml-grammar.scm")
+(defvar *gen-dir*      "gen/")
+
+(ensure-directories-exist (concatenate 'string *gen-dir* "x"))
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; DIRECT EMITTERS
+;;; emit-yaml-{lang}.lisp each define project-yaml-to-{lang}
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defparameter *direct-emitters*
+  '(("cpp"  "emit/emit-yaml-cpp.lisp"  project-yaml-to-cpp  "yaml-reader.cpp")
+    ("java" "emit/emit-yaml-java.lisp" project-yaml-to-java "YamlReader.java")
+    ("rust" "emit/emit-yaml-rust.lisp" project-yaml-to-rust "yaml_reader.rs")))
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; PEG EMITTERS
+;;; emit-yaml-peg.lisp defines def-tgt, *tgt*, project-yaml.
+;;; Each spec fills *tgt*, then we call project-yaml.
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defparameter *peg-emitters*
+  '(("go"      "spec/peg-go.lisp"     "yaml_reader.go")
+    ("python"  "spec/peg-python.lisp" "yaml_reader.py")
+    ("objc"    "spec/peg-objc.lisp"   "YAMLReader.m")
+    ("cpp-peg" "spec/peg-cpp.lisp"    "yaml-reader-peg.cpp")
+    ("rust-peg" "spec/peg-rust.lisp"  "yaml_reader_peg.rs")))
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; BUILD
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defun build-all ()
+  (format t "~&; ════════════════════════════════════════~%")
+  (format t "; Futumura — YAML grammar projector~%")
+  (format t "; Grammar: ~A~%" *grammar-path*)
+  (format t "; Output:  ~A~%" *gen-dir*)
+  (format t "; ════════════════════════════════════════~%")
+
+  ;; Direct emitters
+  (dolist (entry *direct-emitters*)
+    (destructuring-bind (lang file fn output) entry
+      (format t "~&; ── ~A ──~%" lang)
+      (handler-case
+          (progn
+            (load file)
+            (funcall (find-symbol (symbol-name fn) :yaml-eval)
+                     *grammar-path*
+                     (concatenate 'string *gen-dir* output)))
+        (error (e)
+          (format t ";   ERROR [~A]: ~A~%" lang e)))))
+
+  ;; PEG emitters — load engine once (defines def-tgt, *tgt*, project-yaml)
+  (load "emit/emit-yaml-peg.lisp")
+  (load "emit/emit-yaml-concerns.lisp")
+
+  (dolist (entry *peg-emitters*)
+    (destructuring-bind (lang spec-file output) entry
+      (format t "~&; ── ~A (peg) ──~%" lang)
+      (handler-case
+          (progn
+            ;; Reset target spec
+            (clrhash *tgt*)
+            ;; Load language spec (fills *tgt*)
+            (load spec-file)
+            ;; Project
+            (project-yaml *grammar-path*
+                          (concatenate 'string *gen-dir* output)))
+        (error (e)
+          (format t ";   ERROR [~A]: ~A~%" lang e)))))
+
+  (format t "~&; ════════════════════════════════════════~%")
+  (format t "; Done. All outputs in ~A~%" *gen-dir*))
+
+(build-all)

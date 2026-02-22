@@ -155,13 +155,47 @@
                    (format nil "~D" (char-code (char (symbol-name x) 0)))))))
     (format nil "match_range(inp, ~A, ~A)" (hv lo) (hv hi))))
 
+;;; ═══════════════════════════════════════════════════════════════════
+;;; LINE FORMATTING — structure-aware, driven from ce-seq / ce-alt
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defparameter *max-line-length* 100)
+(defvar *indent-level* 1
+  "Current indentation depth for multi-line emission (1 = inside function body).")
+
+(defun indent-str ()
+  "Return indentation string for current depth."
+  (make-string (* 4 *indent-level*) :initial-element #\Space))
+
+(defun ml-join (wrapped)
+  "Join closure list with ,\\n+indent for multi-line emission."
+  (let* ((pad (indent-str))
+         (sep (concatenate 'string "," (string #\Newline) pad)))
+    (concatenate 'string
+                 (string #\Newline) pad
+                 (format nil (concatenate 'string "~{~A~^" sep "~}") wrapped))))
+
 (defun ce-seq (exprs env)
   (if (= 1 (length exprs)) (ce (car exprs) env)
-      (funcall (tgt "seq-emit") (mapcar (lambda (e) (bw (ce e env) env)) exprs))))
+      ;; First try single-line at current indent
+      (let ((wrapped (mapcar (lambda (e) (bw (ce e env) env)) exprs)))
+        (let ((one-line (funcall (tgt "seq-emit") wrapped)))
+          (if (<= (length one-line) *max-line-length*)
+              one-line
+              ;; Too long — recompile with bumped indent so nested exprs indent deeper
+              (let* ((*indent-level* (1+ *indent-level*))
+                     (wrapped2 (mapcar (lambda (e) (bw (ce e env) env)) exprs)))
+                (funcall (tgt "seq-emit") (list (ml-join wrapped2)))))))))
 
 (defun ce-alt (exprs env)
   (if (= 1 (length exprs)) (ce (car exprs) env)
-      (funcall (tgt "alt-emit") (mapcar (lambda (e) (bw (ce e env) env)) exprs))))
+      (let ((wrapped (mapcar (lambda (e) (bw (ce e env) env)) exprs)))
+        (let ((one-line (funcall (tgt "alt-emit") wrapped)))
+          (if (<= (length one-line) *max-line-length*)
+              one-line
+              (let* ((*indent-level* (1+ *indent-level*))
+                     (wrapped2 (mapcar (lambda (e) (bw (ce e env) env)) exprs)))
+                (funcall (tgt "alt-emit") (list (ml-join wrapped2)))))))))
 
 (defun ce-ref (name call-args env)
   (if call-args
@@ -242,22 +276,33 @@
               (emit-block (funcall fwd-fn (peg-ident (rdef-name rd)) (rdef-params rd)))))
           (blank)))
       ;; Rules
-      (emit "// ════════════════════════════════════════════════════════════════")
-      (emit "// YAML 1.2 Grammar — 211 rules")
-      (emit "// ════════════════════════════════════════════════════════════════")
-      (blank)
-      (dolist (rd (grammar-rules-ordered gram))
-        (unless (member (rdef-name rd) '(IN-FLOW SEQ-SPACES))
-          (let* ((nm (peg-ident (rdef-name rd)))
-                 (ps (rdef-params rd))
-                 (sig (funcall (tgt "fn-sig") nm ps))
-                 (body-str (ce (rdef-body rd) ps)))
-            (emitf "// [~D] ~A~%" (rdef-num rd) (rdef-name rd))
-            (emit-block (funcall (tgt "fn-body") sig body-str))
-            (blank))))
-      ;; API + main
+      (let ((cmt (or (tgt "comment-prefix") "//")))
+        (emitf "~A ════════════════════════════════════════════════════════════════~%" cmt)
+        (emitf "~A YAML 1.2 Grammar — 211 rules~%" cmt)
+        (emitf "~A ════════════════════════════════════════════════════════════════~%" cmt)
+        (blank)
+        (dolist (rd (grammar-rules-ordered gram))
+          (unless (member (rdef-name rd) '(IN-FLOW SEQ-SPACES))
+            (let* ((nm (peg-ident (rdef-name rd)))
+                   (ps (rdef-params rd))
+                   (sig (funcall (tgt "fn-sig") nm ps))
+                   (body-str (ce (rdef-body rd) ps)))
+              (emitf "~A [~D] ~A~%" cmt (rdef-num rd) (rdef-name rd))
+              (emit-block (funcall (tgt "fn-body") sig body-str))
+              (blank)))))
+      ;; API then concerns then namespace-close then main
       (emit-block (tgt "api"))
       (blank)
+      ;; Concern layer — generated from vocab
+      (when (tgt "cv")
+        (emit-yaml-concerns))
+      ;; Legacy string block concerns (transitional)
+      (when (and (tgt "yaml-concerns") (not (tgt "cv")))
+        (emit-block (tgt "yaml-concerns"))
+        (blank))
+      (when (tgt "namespace-close")
+        (emit-block (tgt "namespace-close"))
+        (blank))
       (emit-block (tgt "main-fn")))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
