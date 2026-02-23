@@ -12,7 +12,10 @@
 (def-tgt "target-name" "Zig")
 (def-tgt "default-output" "yaml_reader.zig")
 (def-tgt "comment-prefix" "//")
-(def-tgt "call-style" "bash")  ;; wrapper-based, no closures
+(def-tgt "call-style" "wrapper")  ;; wrapper-based, no closures, C-style parens
+(def-tgt "wrapper-fmt"
+  (lambda (name body)
+    (format nil "fn ~A() void { ~A }" name (zig-terminate body))))
 
 (def-tgt "keywords"
   '("align" "allowzero" "and" "anyframe" "anytype" "asm" "async" "await"
@@ -57,22 +60,34 @@
 (def-tgt "switch-emit"
   (lambda (param cases)
     (with-output-to-string (s)
-      (format s "switch_ctx(~A, &[_]CtxCase{~%" param)
+      (format s "switch_ctx(g.~A, &[_]CtxCase{~%" param)
       (loop for (val body) in cases
-            do (format s "        .{ .ctx = ~S, .fn = ~A },~%" val body))
+            do (let ((wname (make-bash-wrapper body)))
+                 (format s "        .{ .ctx = ~S, .func = ~A },~%" val wname)))
       (format s "    })"))))
 
 ;;; ── Let ──
 
-(def-tgt "let-int"
-  (lambda (vname expr rest)
-    (format nil "blk: { ~A; if (g.failed) break :blk; const ~A = g.rtagint; save_inp(); ~A }"
-            expr vname rest)))
+(let ((blk-counter 0))
+  (defun zig-terminate (s)
+    "Add semicolon if S doesn't already end with }."
+    (let ((trimmed (string-right-trim '(#\Space #\Newline) s)))
+      (if (and (> (length trimmed) 0)
+               (char= (char trimmed (1- (length trimmed))) #\}))
+          s
+          (format nil "~A;" s))))
 
-(def-tgt "let-ctx"
-  (lambda (vname expr rest)
-    (format nil "blk: { ~A; if (g.failed) break :blk; const ~A = g.rtag; save_inp(); ~A }"
-            expr vname rest)))
+  (def-tgt "let-int"
+    (lambda (vname expr rest)
+      (let ((lbl (format nil "blk~D" (incf blk-counter))))
+        (format nil "~A: { ~A; if (g.failed) break :~A; g.~A = g.rtagint; save_inp(); ~A }"
+                lbl expr lbl vname (zig-terminate rest)))))
+
+  (def-tgt "let-ctx"
+    (lambda (vname expr rest)
+      (let ((lbl (format nil "blk~D" (incf blk-counter))))
+        (format nil "~A: { ~A; if (g.failed) break :~A; g.~A = g.rtag; save_inp(); ~A }"
+                lbl expr lbl vname (zig-terminate rest))))))
 
 ;;; ── Arg compilation ──
 
@@ -305,6 +320,15 @@ fn eof_ok() void { g.failed = !at_eof(); }"
 
 "// ── Context ──
 
+const CtxCase = struct { ctx: []const u8, func: PFn };
+
+fn switch_ctx(param: []const u8, cases: []const CtxCase) void {
+    for (cases) |cs| {
+        if (std.mem.eql(u8, param, cs.ctx)) { cs.func(); return; }
+    }
+    g.failed = true;
+}
+
 fn in_flow(c: []const u8) []const u8 {
     if (std.mem.eql(u8, c, \"FLOW-OUT\") or std.mem.eql(u8, c, \"FLOW-IN\")) return \"FLOW-IN\";
     return \"FLOW-KEY\";
@@ -336,7 +360,7 @@ fn collect_fn(f: PFn) void { f(); }
 
 fn detect_indent(n: i32) void {
     var sp: usize = 0;
-    var i = g.pos;
+    const i = g.pos;
     while (i + sp < g.src.len and g.src[i + sp] == ' ') : (sp += 1) {}
     if (i + sp < g.src.len and g.src[i + sp] != '\\n') {
         g.rtagint = @intCast(@max(1, @as(i32, @intCast(sp)) - n));
@@ -419,6 +443,15 @@ pub fn main() !void {
 
 ;;; ── Combinator name overrides ──
 
+(def-tgt "rule-call-with-params"
+  (lambda (fn-name params compiled-args)
+    (with-output-to-string (s)
+      (loop for p in params
+            for a in compiled-args
+            do (format s "g.~A = ~A; " (peg-ident p) a))
+      (format s "~A()" fn-name))))
+
+(def-tgt "comb-ok" "ok_r")
 (def-tgt "comb-star" "peg_star")
 (def-tgt "comb-neg" "r_neg")
 (def-tgt "comb-minus" "minus_fn")

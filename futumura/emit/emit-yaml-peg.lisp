@@ -44,10 +44,14 @@
        (if args
            (format nil "~A ~{~A ~}~A" fn args iv)
            (format nil "~A ~A" fn iv)))
-      ((and style (or (string= style "bash") (string= style "wrapper")))
+      ((and style (string= style "bash"))
        (if args
            (format nil "~A ~{~A~^ ~}" fn args)
            fn))
+      ((and style (string= style "wrapper"))
+       (if args
+           (format nil "~A(~{~A~^, ~})" fn args)
+           (format nil "~A()" fn)))
       (t
        (if args
            (format nil "~A(~A, ~{~A~^, ~})" fn iv args)
@@ -62,10 +66,14 @@
        (if args
            (format nil "~A ~A ~{~A~^ ~}" fn iv args)
            (format nil "~A ~A" fn iv)))
-      ((and style (or (string= style "bash") (string= style "wrapper")))
+      ((and style (string= style "bash"))
        (if args
            (format nil "~A ~{~A~^ ~}" fn args)
            fn))
+      ((and style (string= style "wrapper"))
+       (if args
+           (format nil "~A(~{~A~^, ~})" fn args)
+           (format nil "~A()" fn)))
       (t
        (if args
            (format nil "~A(~A, ~{~A~^, ~})" fn iv args)
@@ -124,13 +132,23 @@
 (defvar *bash-wrapper-counter* 0)
 
 (defun bash-style-p ()
+  "True for call styles that use wrapper functions (bash and wrapper)."
+  (let ((s (tgt "call-style")))
+    (and s (or (string= s "bash") (string= s "wrapper")))))
+
+(defun pure-bash-p ()
+  "True only for actual bash syntax (arithmetic etc)."
   (let ((s (tgt "call-style")))
     (and s (string= s "bash"))))
 
 (defun make-bash-wrapper (body)
   "Generate a named wrapper function for BODY, return the name."
-  (let ((name (format nil "_w~D" (incf *bash-wrapper-counter*))))
-    (push (format nil "~A() { ~A; }" name body) *bash-wrappers*)
+  (let* ((name (format nil "_w~D" (incf *bash-wrapper-counter*)))
+         (fmt (or (tgt "wrapper-fmt") "~A() { ~A; }")))
+    (push (if (functionp fmt)
+              (funcall fmt name body)
+              (format nil fmt name body))
+          *bash-wrappers*)
     name))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -239,11 +257,15 @@
          (SEQ-SPACES (tcall0 "seq_spaces" (ca (cadr expr) env) (ca (caddr expr) env)))
          (t (let ((rd (gethash op (gram-rules *gram*))))
               (if rd
-                  (if (cdr args)
-                      (apply #'trcall (peg-ident op) (mapcar (lambda (a) (ca a env)) args))
-                      (if args
-                          (trcall (peg-ident op) (ca (car args) env))
-                          (trcall (peg-ident op))))
+                  (let ((compiled-args (mapcar (lambda (a) (ca a env)) args))
+                        (hook (tgt "rule-call-with-params")))
+                    (if (and hook args)
+                        (funcall hook (peg-ident op) (rdef-params rd) compiled-args)
+                        (if (cdr args)
+                            (apply #'trcall (peg-ident op) compiled-args)
+                            (if args
+                                (trcall (peg-ident op) (car compiled-args))
+                                (trcall (peg-ident op))))))
                   (format nil "/* UNKNOWN ~S */" expr)))))))
     (t (format nil "/* ?? ~S */" expr))))
 
@@ -326,8 +348,14 @@
 
 (defun ce-ref (name call-args env)
   (if call-args
-      (apply #'trcall (peg-ident name)
-             (mapcar (lambda (a) (ca a env)) call-args))
+      (let ((hook (tgt "rule-call-with-params"))
+            (compiled (mapcar (lambda (a) (ca a env)) call-args)))
+        (if hook
+            (let ((rd (gethash name (gram-rules *gram*))))
+              (if rd
+                  (funcall hook (peg-ident name) (rdef-params rd) compiled)
+                  (apply #'trcall (peg-ident name) compiled)))
+            (apply #'trcall (peg-ident name) compiled)))
       (trcall (peg-ident name))))
 
 (defun ce-switch (param cases env)
@@ -370,12 +398,12 @@
     ((symbolp expr) (peg-ident expr))
     ((and (listp expr) (eq (car expr) '+))
      (let ((parts (mapcar (lambda (e) (ca e env)) (cdr expr))))
-       (if (bash-style-p)
+       (if (pure-bash-p)
            (format nil "$(( ~{~A~^ + ~} ))" parts)
            (format nil "(~{~A~^ + ~})" parts))))
     ((and (listp expr) (eq (car expr) '-))
      (let ((ps (mapcar (lambda (e) (ca e env)) (cdr expr))))
-       (if (bash-style-p)
+       (if (pure-bash-p)
            (if (= 1 (length ps))
                (format nil "$(( -~A ))" (car ps))
                (format nil "$(( ~A~{ - ~A~} ))" (car ps) (cdr ps)))

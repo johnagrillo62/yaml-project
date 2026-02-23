@@ -229,7 +229,7 @@ fn collect_fn(f: PFn) void { f(); }
 
 fn detect_indent(n: i32) void {
     var sp: usize = 0;
-    const i = g.pos;
+    var i = g.pos;
     while (i + sp < g.src.len and g.src[i + sp] == ' ') : (sp += 1) {}
     if (i + sp < g.src.len and g.src[i + sp] != '\n') {
         g.rtagint = @intCast(@max(1, @as(i32, @intCast(sp)) - n));
@@ -513,32 +513,32 @@ fn _w185() void { s_space(); }
 fn _w186() void { s_space(); }
 fn _w187() void { s_white(); }
 fn _w188() void { plus_(_w187); }
-fn _w189() void { ok_r(); }
-fn _w190() void { g.n = g.n; s_block_line_prefix(); }
-fn _w191() void { g.n = g.n; s_block_line_prefix(); }
-fn _w192() void { g.n = g.n; s_flow_line_prefix(); }
-fn _w193() void { g.n = g.n; s_flow_line_prefix(); }
-fn _w194() void { g.n = g.n; s_indent(); }
+fn _w189() void { ok(); }
+fn _w190() void { s_block_line_prefix(g.n); }
+fn _w191() void { s_block_line_prefix(g.n); }
+fn _w192() void { s_flow_line_prefix(g.n); }
+fn _w193() void { s_flow_line_prefix(g.n); }
+fn _w194() void { s_indent(g.n); }
 fn _w195() void { s_separate_in_line(); }
 fn _w196() void { opt(_w195); }
-fn _w197() void { g.n = g.n; g.c = g.c; s_line_prefix(); }
-fn _w198() void { g.n = g.n; s_indent_lt(); }
+fn _w197() void { s_line_prefix(g.n, g.c); }
+fn _w198() void { s_indent_lt(g.n); }
 fn _w199() void { peg_alt(&[_]PFn{_w197, _w198}); }
 fn _w200() void { b_as_line_feed(); }
 fn _w201() void { b_non_content(); }
-fn _w202() void { g.n = g.n; g.c = g.c; l_empty(); }
+fn _w202() void { l_empty(g.n, g.c); }
 fn _w203() void { plus_(_w202); }
-fn _w204() void { g.n = g.n; g.c = g.c; b_l_trimmed(); }
+fn _w204() void { b_l_trimmed(g.n, g.c); }
 fn _w205() void { b_as_space(); }
 fn _w206() void { s_separate_in_line(); }
 fn _w207() void { opt(_w206); }
-fn _w208() void { g.n = g.n; g.c = "FLOW-IN"; b_l_folded(); }
-fn _w209() void { g.n = g.n; s_flow_line_prefix(); }
+fn _w208() void { b_l_folded(g.n, "FLOW-IN"); }
+fn _w209() void { s_flow_line_prefix(g.n); }
 fn _w210() void { c_comment(); }
 fn _w211() void { nb_char(); }
 fn _w212() void { peg_star(_w211); }
 fn _w213() void { b_non_content(); }
-fn _w214() void { ok_r(); }
+fn _w214() void { ok(); }
 fn _w215() void { s_separate_in_line(); }
 fn _w216() void { c_nb_comment_text(); }
 fn _w217() void { opt(_w216); }
@@ -550,18 +550,18 @@ fn _w222() void { c_nb_comment_text(); }
 fn _w223() void { opt(_w222); }
 fn _w224() void { b_non_content(); }
 fn _w225() void { s_b_comment(); }
-fn _w226() void { ok_r(); }
+fn _w226() void { ok(); }
 fn _w227() void { peg_alt(&[_]PFn{_w225, _w226}); }
 fn _w228() void { l_comment(); }
 fn _w229() void { peg_star(_w228); }
-fn _w230() void { g.n = g.n; s_separate_lines(); }
-fn _w231() void { g.n = g.n; s_separate_lines(); }
-fn _w232() void { g.n = g.n; s_separate_lines(); }
-fn _w233() void { g.n = g.n; s_separate_lines(); }
+fn _w230() void { s_separate_lines(g.n); }
+fn _w231() void { s_separate_lines(g.n); }
+fn _w232() void { s_separate_lines(g.n); }
+fn _w233() void { s_separate_lines(g.n); }
 fn _w234() void { s_separate_in_line(); }
 fn _w235() void { s_separate_in_line(); }
 fn _w236() void { s_l_comments(); }
-fn _w237() void { g.n = g.n; s_flow_line_prefix(); }
+fn _w237() void { s_flow_line_prefix(g.n); }
 fn _w238() void { peg_seq(&[_]PFn{_w236, _w237}); }
 fn _w239() void { s_separate_in_line(); }
 fn _w240() void { c_directive(); }
@@ -606,13 +606,13 @@ fn _w278() void { ns_tag_char(); }
 fn _w279() void { ns_uri_char(); }
 fn _w280() void { peg_star(_w279); }
 fn _w281() void { c_ns_tag_property(); }
-fn _w282() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w282() void { s_separate(g.n, g.c); }
 fn _w283() void { c_ns_anchor_property(); }
 fn _w284() void { peg_seq(&[_]PFn{_w282, _w283}); }
 fn _w285() void { opt(_w284); }
 fn _w286() void { peg_seq(&[_]PFn{_w281, _w285}); }
 fn _w287() void { c_ns_anchor_property(); }
-fn _w288() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w288() void { s_separate(g.n, g.c); }
 fn _w289() void { c_ns_tag_property(); }
 fn _w290() void { peg_seq(&[_]PFn{_w288, _w289}); }
 fn _w291() void { opt(_w290); }
@@ -647,11 +647,11 @@ fn _w319() void { minus_fn(_w315, _w318); }
 fn _w320() void { nb_double_char(); }
 fn _w321() void { s_white(); }
 fn _w322() void { match_cp(34); }
-fn _w323() void { g.n = g.n; g.c = g.c; nb_double_text(); }
+fn _w323() void { nb_double_text(g.n, g.c); }
 fn _w324() void { match_cp(34); }
 fn _w325() void { peg_seq(&[_]PFn{_w322, _w323, _w324}); }
-fn _w326() void { g.n = g.n; nb_double_multi_line(); }
-fn _w327() void { g.n = g.n; nb_double_multi_line(); }
+fn _w326() void { nb_double_multi_line(g.n); }
+fn _w327() void { nb_double_multi_line(g.n); }
 fn _w328() void { nb_double_one_line(); }
 fn _w329() void { nb_double_one_line(); }
 fn _w330() void { nb_double_char(); }
@@ -659,26 +659,26 @@ fn _w331() void { s_white(); }
 fn _w332() void { peg_star(_w331); }
 fn _w333() void { match_cp(92); }
 fn _w334() void { b_non_content(); }
-fn _w335() void { g.n = g.n; g.c = "FLOW-IN"; l_empty(); }
+fn _w335() void { l_empty(g.n, "FLOW-IN"); }
 fn _w336() void { peg_star(_w335); }
-fn _w337() void { g.n = g.n; s_flow_line_prefix(); }
-fn _w338() void { g.n = g.n; s_double_escaped(); }
-fn _w339() void { g.n = g.n; s_flow_folded(); }
+fn _w337() void { s_flow_line_prefix(g.n); }
+fn _w338() void { s_double_escaped(g.n); }
+fn _w339() void { s_flow_folded(g.n); }
 fn _w340() void { s_white(); }
 fn _w341() void { peg_star(_w340); }
 fn _w342() void { ns_double_char(); }
 fn _w343() void { peg_seq(&[_]PFn{_w341, _w342}); }
-fn _w344() void { g.n = g.n; s_double_break(); }
+fn _w344() void { s_double_break(g.n); }
 fn _w345() void { ns_double_char(); }
 fn _w346() void { nb_ns_double_in_line(); }
-fn _w347() void { g.n = g.n; s_double_next_line(); }
+fn _w347() void { s_double_next_line(g.n); }
 fn _w348() void { s_white(); }
 fn _w349() void { peg_star(_w348); }
 fn _w350() void { peg_alt(&[_]PFn{_w347, _w349}); }
 fn _w351() void { peg_seq(&[_]PFn{_w345, _w346, _w350}); }
 fn _w352() void { opt(_w351); }
 fn _w353() void { nb_ns_double_in_line(); }
-fn _w354() void { g.n = g.n; s_double_next_line(); }
+fn _w354() void { s_double_next_line(g.n); }
 fn _w355() void { s_white(); }
 fn _w356() void { peg_star(_w355); }
 fn _w357() void { peg_alt(&[_]PFn{_w354, _w356}); }
@@ -689,11 +689,11 @@ fn _w361() void { minus_fn(_w359, _w360); }
 fn _w362() void { nb_single_char(); }
 fn _w363() void { s_white(); }
 fn _w364() void { match_cp(39); }
-fn _w365() void { g.n = g.n; g.c = g.c; nb_single_text(); }
+fn _w365() void { nb_single_text(g.n, g.c); }
 fn _w366() void { match_cp(39); }
 fn _w367() void { peg_seq(&[_]PFn{_w364, _w365, _w366}); }
-fn _w368() void { g.n = g.n; nb_single_multi_line(); }
-fn _w369() void { g.n = g.n; nb_single_multi_line(); }
+fn _w368() void { nb_single_multi_line(g.n); }
+fn _w369() void { nb_single_multi_line(g.n); }
 fn _w370() void { nb_single_one_line(); }
 fn _w371() void { nb_single_one_line(); }
 fn _w372() void { nb_single_char(); }
@@ -701,17 +701,17 @@ fn _w373() void { s_white(); }
 fn _w374() void { peg_star(_w373); }
 fn _w375() void { ns_single_char(); }
 fn _w376() void { peg_seq(&[_]PFn{_w374, _w375}); }
-fn _w377() void { g.n = g.n; s_flow_folded(); }
+fn _w377() void { s_flow_folded(g.n); }
 fn _w378() void { ns_single_char(); }
 fn _w379() void { ns_single_in_line(); }
-fn _w380() void { g.n = g.n; s_single_next_line(); }
+fn _w380() void { s_single_next_line(g.n); }
 fn _w381() void { s_white(); }
 fn _w382() void { peg_star(_w381); }
 fn _w383() void { peg_alt(&[_]PFn{_w380, _w382}); }
 fn _w384() void { peg_seq(&[_]PFn{_w378, _w379, _w383}); }
 fn _w385() void { opt(_w384); }
 fn _w386() void { ns_single_in_line(); }
-fn _w387() void { g.n = g.n; s_single_next_line(); }
+fn _w387() void { s_single_next_line(g.n); }
 fn _w388() void { s_white(); }
 fn _w389() void { peg_star(_w388); }
 fn _w390() void { peg_alt(&[_]PFn{_w387, _w389}); }
@@ -722,7 +722,7 @@ fn _w394() void { match_cp(63); }
 fn _w395() void { match_cp(58); }
 fn _w396() void { match_cp(45); }
 fn _w397() void { peg_alt(&[_]PFn{_w394, _w395, _w396}); }
-fn _w398() void { g.c = g.c; ns_plain_safe(); }
+fn _w398() void { ns_plain_safe(g.c); }
 fn _w399() void { ahead(_w398); }
 fn _w400() void { peg_seq(&[_]PFn{_w397, _w399}); }
 fn _w401() void { ns_plain_safe_out(); }
@@ -731,7 +731,7 @@ fn _w403() void { ns_plain_safe_out(); }
 fn _w404() void { ns_plain_safe_in(); }
 fn _w405() void { ns_char(); }
 fn _w406() void { c_flow_indicator(); }
-fn _w407() void { g.c = g.c; ns_plain_safe(); }
+fn _w407() void { ns_plain_safe(g.c); }
 fn _w408() void { match_cp(58); }
 fn _w409() void { match_cp(35); }
 fn _w410() void { peg_alt(&[_]PFn{_w408, _w409}); }
@@ -741,14 +741,14 @@ fn _w413() void { behind(_w412); }
 fn _w414() void { match_cp(35); }
 fn _w415() void { peg_seq(&[_]PFn{_w413, _w414}); }
 fn _w416() void { match_cp(58); }
-fn _w417() void { g.c = g.c; ns_plain_safe(); }
+fn _w417() void { ns_plain_safe(g.c); }
 fn _w418() void { ahead(_w417); }
 fn _w419() void { peg_seq(&[_]PFn{_w416, _w418}); }
-fn _w420() void { g.n = g.n; g.c = g.c; ns_plain_multi_line(); }
-fn _w421() void { g.n = g.n; g.c = g.c; ns_plain_multi_line(); }
-fn _w422() void { g.c = g.c; ns_plain_one_line(); }
-fn _w423() void { g.c = g.c; ns_plain_one_line(); }
-fn _w424() void { switch_ctx(g.c, &[_]CtxCase{
+fn _w420() void { ns_plain_multi_line(g.n, g.c); }
+fn _w421() void { ns_plain_multi_line(g.n, g.c); }
+fn _w422() void { ns_plain_one_line(g.c); }
+fn _w423() void { ns_plain_one_line(g.c); }
+fn _w424() void { switch_ctx(c, &[_]CtxCase{
         .{ .ctx = "FLOW-OUT", .func = _w420 },
         .{ .ctx = "FLOW-IN", .func = _w421 },
         .{ .ctx = "BLOCK-KEY", .func = _w422 },
@@ -756,143 +756,143 @@ fn _w424() void { switch_ctx(g.c, &[_]CtxCase{
     }); }
 fn _w425() void { s_white(); }
 fn _w426() void { peg_star(_w425); }
-fn _w427() void { g.c = g.c; ns_plain_char(); }
+fn _w427() void { ns_plain_char(g.c); }
 fn _w428() void { peg_seq(&[_]PFn{_w426, _w427}); }
-fn _w429() void { g.c = g.c; ns_plain_first(); }
-fn _w430() void { g.c = g.c; nb_ns_plain_in_line(); }
-fn _w431() void { g.n = g.n; s_flow_folded(); }
+fn _w429() void { ns_plain_first(g.c); }
+fn _w430() void { nb_ns_plain_in_line(g.c); }
+fn _w431() void { s_flow_folded(g.n); }
 fn _w432() void { c_forbidden(); }
 fn _w433() void { r_neg(_w432); }
-fn _w434() void { g.c = g.c; ns_plain_char(); }
-fn _w435() void { g.c = g.c; nb_ns_plain_in_line(); }
-fn _w436() void { g.c = g.c; ns_plain_one_line(); }
-fn _w437() void { g.n = g.n; g.c = g.c; s_ns_plain_next_line(); }
+fn _w434() void { ns_plain_char(g.c); }
+fn _w435() void { nb_ns_plain_in_line(g.c); }
+fn _w436() void { ns_plain_one_line(g.c); }
+fn _w437() void { s_ns_plain_next_line(g.n, g.c); }
 fn _w438() void { peg_star(_w437); }
 fn _w439() void { match_cp(91); }
-fn _w440() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w440() void { s_separate(g.n, g.c); }
 fn _w441() void { opt(_w440); }
-fn _w442() void { g.n = g.n; g.c = in_flow(g.c); ns_s_flow_seq_entries(); }
+fn _w442() void { ns_s_flow_seq_entries(g.n, in_flow(g.c)); }
 fn _w443() void { collect_fn(_w442); }
 fn _w444() void { opt(_w443); }
 fn _w445() void { match_cp(93); }
 fn _w446() void { peg_seq(&[_]PFn{_w439, _w441, _w444, _w445}); }
-fn _w447() void { g.n = g.n; g.c = g.c; ns_flow_seq_entry(); }
-fn _w448() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w447() void { ns_flow_seq_entry(g.n, g.c); }
+fn _w448() void { s_separate(g.n, g.c); }
 fn _w449() void { opt(_w448); }
 fn _w450() void { match_cp(44); }
-fn _w451() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w451() void { s_separate(g.n, g.c); }
 fn _w452() void { opt(_w451); }
-fn _w453() void { g.n = g.n; g.c = g.c; ns_s_flow_seq_entries(); }
+fn _w453() void { ns_s_flow_seq_entries(g.n, g.c); }
 fn _w454() void { opt(_w453); }
 fn _w455() void { peg_seq(&[_]PFn{_w450, _w452, _w454}); }
 fn _w456() void { opt(_w455); }
-fn _w457() void { g.n = g.n; g.c = g.c; ns_flow_pair(); }
-fn _w458() void { g.n = g.n; g.c = g.c; ns_flow_node(); }
+fn _w457() void { ns_flow_pair(g.n, g.c); }
+fn _w458() void { ns_flow_node(g.n, g.c); }
 fn _w459() void { match_cp(123); }
-fn _w460() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w460() void { s_separate(g.n, g.c); }
 fn _w461() void { opt(_w460); }
-fn _w462() void { g.n = g.n; g.c = in_flow(g.c); ns_s_flow_map_entries(); }
+fn _w462() void { ns_s_flow_map_entries(g.n, in_flow(g.c)); }
 fn _w463() void { collect_fn(_w462); }
 fn _w464() void { opt(_w463); }
 fn _w465() void { match_cp(125); }
 fn _w466() void { peg_seq(&[_]PFn{_w459, _w461, _w464, _w465}); }
-fn _w467() void { g.n = g.n; g.c = g.c; ns_flow_map_entry(); }
-fn _w468() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w467() void { ns_flow_map_entry(g.n, g.c); }
+fn _w468() void { s_separate(g.n, g.c); }
 fn _w469() void { opt(_w468); }
 fn _w470() void { match_cp(44); }
-fn _w471() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w471() void { s_separate(g.n, g.c); }
 fn _w472() void { opt(_w471); }
-fn _w473() void { g.n = g.n; g.c = g.c; ns_s_flow_map_entries(); }
+fn _w473() void { ns_s_flow_map_entries(g.n, g.c); }
 fn _w474() void { opt(_w473); }
 fn _w475() void { peg_seq(&[_]PFn{_w470, _w472, _w474}); }
 fn _w476() void { opt(_w475); }
 fn _w477() void { match_cp(63); }
-fn _w478() void { g.n = g.n; g.c = g.c; s_separate(); }
-fn _w479() void { g.n = g.n; g.c = g.c; ns_flow_map_explicit_entry(); }
+fn _w478() void { s_separate(g.n, g.c); }
+fn _w479() void { ns_flow_map_explicit_entry(g.n, g.c); }
 fn _w480() void { peg_seq(&[_]PFn{_w477, _w478, _w479}); }
-fn _w481() void { g.n = g.n; g.c = g.c; ns_flow_map_implicit_entry(); }
-fn _w482() void { g.n = g.n; g.c = g.c; ns_flow_map_implicit_entry(); }
+fn _w481() void { ns_flow_map_implicit_entry(g.n, g.c); }
+fn _w482() void { ns_flow_map_implicit_entry(g.n, g.c); }
 fn _w483() void { e_node(); }
 fn _w484() void { e_node(); }
 fn _w485() void { peg_seq(&[_]PFn{_w483, _w484}); }
-fn _w486() void { g.n = g.n; g.c = g.c; ns_flow_map_yaml_key_entry(); }
-fn _w487() void { g.n = g.n; g.c = g.c; c_ns_flow_map_empty_key_entry(); }
-fn _w488() void { g.n = g.n; g.c = g.c; c_ns_flow_map_json_key_entry(); }
+fn _w486() void { ns_flow_map_yaml_key_entry(g.n, g.c); }
+fn _w487() void { c_ns_flow_map_empty_key_entry(g.n, g.c); }
+fn _w488() void { c_ns_flow_map_json_key_entry(g.n, g.c); }
 fn _w489() void { peg_alt(&[_]PFn{_w486, _w487, _w488}); }
-fn _w490() void { g.n = g.n; g.c = g.c; ns_flow_yaml_node(); }
-fn _w491() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w490() void { ns_flow_yaml_node(g.n, g.c); }
+fn _w491() void { s_separate(g.n, g.c); }
 fn _w492() void { opt(_w491); }
-fn _w493() void { g.n = g.n; g.c = g.c; c_ns_flow_map_separate_value(); }
+fn _w493() void { c_ns_flow_map_separate_value(g.n, g.c); }
 fn _w494() void { peg_seq(&[_]PFn{_w492, _w493}); }
 fn _w495() void { e_node(); }
 fn _w496() void { peg_alt(&[_]PFn{_w494, _w495}); }
 fn _w497() void { e_node(); }
-fn _w498() void { g.n = g.n; g.c = g.c; c_ns_flow_map_separate_value(); }
+fn _w498() void { c_ns_flow_map_separate_value(g.n, g.c); }
 fn _w499() void { match_cp(58); }
-fn _w500() void { g.c = g.c; ns_plain_safe(); }
+fn _w500() void { ns_plain_safe(g.c); }
 fn _w501() void { r_neg(_w500); }
-fn _w502() void { g.n = g.n; g.c = g.c; s_separate(); }
-fn _w503() void { g.n = g.n; g.c = g.c; ns_flow_node(); }
+fn _w502() void { s_separate(g.n, g.c); }
+fn _w503() void { ns_flow_node(g.n, g.c); }
 fn _w504() void { peg_seq(&[_]PFn{_w502, _w503}); }
 fn _w505() void { e_node(); }
 fn _w506() void { peg_alt(&[_]PFn{_w504, _w505}); }
-fn _w507() void { g.n = g.n; g.c = g.c; c_flow_json_node(); }
-fn _w508() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w507() void { c_flow_json_node(g.n, g.c); }
+fn _w508() void { s_separate(g.n, g.c); }
 fn _w509() void { opt(_w508); }
-fn _w510() void { g.n = g.n; g.c = g.c; c_ns_flow_map_adjacent_value(); }
+fn _w510() void { c_ns_flow_map_adjacent_value(g.n, g.c); }
 fn _w511() void { peg_seq(&[_]PFn{_w509, _w510}); }
 fn _w512() void { e_node(); }
 fn _w513() void { peg_alt(&[_]PFn{_w511, _w512}); }
 fn _w514() void { match_cp(58); }
-fn _w515() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w515() void { s_separate(g.n, g.c); }
 fn _w516() void { opt(_w515); }
-fn _w517() void { g.n = g.n; g.c = g.c; ns_flow_node(); }
+fn _w517() void { ns_flow_node(g.n, g.c); }
 fn _w518() void { peg_seq(&[_]PFn{_w516, _w517}); }
 fn _w519() void { e_node(); }
 fn _w520() void { peg_alt(&[_]PFn{_w518, _w519}); }
 fn _w521() void { match_cp(63); }
-fn _w522() void { g.n = g.n; g.c = g.c; s_separate(); }
-fn _w523() void { g.n = g.n; g.c = g.c; ns_flow_map_explicit_entry(); }
+fn _w522() void { s_separate(g.n, g.c); }
+fn _w523() void { ns_flow_map_explicit_entry(g.n, g.c); }
 fn _w524() void { peg_seq(&[_]PFn{_w521, _w522, _w523}); }
-fn _w525() void { g.n = g.n; g.c = g.c; ns_flow_pair_entry(); }
-fn _w526() void { g.n = g.n; g.c = g.c; ns_flow_pair_yaml_key_entry(); }
-fn _w527() void { g.n = g.n; g.c = g.c; c_ns_flow_map_empty_key_entry(); }
-fn _w528() void { g.n = g.n; g.c = g.c; c_ns_flow_pair_json_key_entry(); }
-fn _w529() void { g.c = "FLOW-KEY"; ns_s_implicit_yaml_key(); }
-fn _w530() void { g.n = g.n; g.c = g.c; c_ns_flow_map_separate_value(); }
-fn _w531() void { g.c = "FLOW-KEY"; c_s_implicit_json_key(); }
-fn _w532() void { g.n = g.n; g.c = g.c; c_ns_flow_map_adjacent_value(); }
-fn _w533() void { g.n = 0; g.c = g.c; ns_flow_yaml_node(); }
+fn _w525() void { ns_flow_pair_entry(g.n, g.c); }
+fn _w526() void { ns_flow_pair_yaml_key_entry(g.n, g.c); }
+fn _w527() void { c_ns_flow_map_empty_key_entry(g.n, g.c); }
+fn _w528() void { c_ns_flow_pair_json_key_entry(g.n, g.c); }
+fn _w529() void { ns_s_implicit_yaml_key("FLOW-KEY"); }
+fn _w530() void { c_ns_flow_map_separate_value(g.n, g.c); }
+fn _w531() void { c_s_implicit_json_key("FLOW-KEY"); }
+fn _w532() void { c_ns_flow_map_adjacent_value(g.n, g.c); }
+fn _w533() void { ns_flow_yaml_node(0, g.c); }
 fn _w534() void { s_separate_in_line(); }
 fn _w535() void { opt(_w534); }
-fn _w536() void { g.n = 0; g.c = g.c; c_flow_json_node(); }
+fn _w536() void { c_flow_json_node(0, g.c); }
 fn _w537() void { s_separate_in_line(); }
 fn _w538() void { opt(_w537); }
-fn _w539() void { g.n = g.n; g.c = g.c; c_flow_sequence(); }
-fn _w540() void { g.n = g.n; g.c = g.c; c_flow_mapping(); }
-fn _w541() void { g.n = g.n; g.c = g.c; c_single_quoted(); }
-fn _w542() void { g.n = g.n; g.c = g.c; c_double_quoted(); }
-fn _w543() void { g.n = g.n; g.c = g.c; ns_flow_yaml_content(); }
-fn _w544() void { g.n = g.n; g.c = g.c; c_flow_json_content(); }
+fn _w539() void { c_flow_sequence(g.n, g.c); }
+fn _w540() void { c_flow_mapping(g.n, g.c); }
+fn _w541() void { c_single_quoted(g.n, g.c); }
+fn _w542() void { c_double_quoted(g.n, g.c); }
+fn _w543() void { ns_flow_yaml_content(g.n, g.c); }
+fn _w544() void { c_flow_json_content(g.n, g.c); }
 fn _w545() void { c_ns_alias_node(); }
-fn _w546() void { g.n = g.n; g.c = g.c; ns_flow_yaml_content(); }
-fn _w547() void { g.n = g.n; g.c = g.c; c_ns_properties(); }
-fn _w548() void { g.n = g.n; g.c = g.c; s_separate(); }
-fn _w549() void { g.n = g.n; g.c = g.c; ns_flow_yaml_content(); }
+fn _w546() void { ns_flow_yaml_content(g.n, g.c); }
+fn _w547() void { c_ns_properties(g.n, g.c); }
+fn _w548() void { s_separate(g.n, g.c); }
+fn _w549() void { ns_flow_yaml_content(g.n, g.c); }
 fn _w550() void { peg_seq(&[_]PFn{_w548, _w549}); }
 fn _w551() void { e_scalar(); }
 fn _w552() void { peg_alt(&[_]PFn{_w550, _w551}); }
 fn _w553() void { peg_seq(&[_]PFn{_w547, _w552}); }
-fn _w554() void { g.n = g.n; g.c = g.c; c_ns_properties(); }
-fn _w555() void { g.n = g.n; g.c = g.c; s_separate(); }
+fn _w554() void { c_ns_properties(g.n, g.c); }
+fn _w555() void { s_separate(g.n, g.c); }
 fn _w556() void { peg_seq(&[_]PFn{_w554, _w555}); }
 fn _w557() void { opt(_w556); }
-fn _w558() void { g.n = g.n; g.c = g.c; c_flow_json_content(); }
+fn _w558() void { c_flow_json_content(g.n, g.c); }
 fn _w559() void { c_ns_alias_node(); }
-fn _w560() void { g.n = g.n; g.c = g.c; ns_flow_content(); }
-fn _w561() void { g.n = g.n; g.c = g.c; c_ns_properties(); }
-fn _w562() void { g.n = g.n; g.c = g.c; s_separate(); }
-fn _w563() void { g.n = g.n; g.c = g.c; ns_flow_content(); }
+fn _w560() void { ns_flow_content(g.n, g.c); }
+fn _w561() void { c_ns_properties(g.n, g.c); }
+fn _w562() void { s_separate(g.n, g.c); }
+fn _w563() void { ns_flow_content(g.n, g.c); }
 fn _w564() void { peg_seq(&[_]PFn{_w562, _w563}); }
 fn _w565() void { e_scalar(); }
 fn _w566() void { peg_alt(&[_]PFn{_w564, _w565}); }
@@ -905,7 +905,7 @@ fn _w572() void { parse_sym_fn(_w571, "STRIP"); }
 fn _w573() void { match_cp(43); }
 fn _w574() void { parse_sym_fn(_w573, "KEEP"); }
 fn _w575() void { val_fn("CLIP"); }
-fn _w576() void { blk2: { peg_alt(&[_]PFn{_w569, _w570}); if (g.failed) break :blk2; g.m = g.rtagint; save_inp(); blk1: { peg_alt(&[_]PFn{_w572, _w574, _w575}); if (g.failed) break :blk1; g.t = g.rtag; save_inp(); s_b_comment(); } } }
+fn _w576() void { blk2: { peg_alt(&[_]PFn{_w569, _w570}); if (g.failed) break :blk2; const m = g.rtagint; save_inp(); blk1: { peg_alt(&[_]PFn{_w572, _w574, _w575}); if (g.failed) break :blk1; const t = g.rtag; save_inp(); s_b_comment() } }; }
 fn _w577() void { match_cp(45); }
 fn _w578() void { parse_sym_fn(_w577, "STRIP"); }
 fn _w579() void { match_cp(43); }
@@ -914,29 +914,29 @@ fn _w581() void { val_fn("CLIP"); }
 fn _w582() void { ns_dec_digit(); }
 fn _w583() void { parse_int_fn(_w582); }
 fn _w584() void { detect_indent(g.n); }
-fn _w585() void { blk4: { peg_alt(&[_]PFn{_w578, _w580, _w581}); if (g.failed) break :blk4; g.t = g.rtag; save_inp(); blk3: { peg_alt(&[_]PFn{_w583, _w584}); if (g.failed) break :blk3; g.m = g.rtagint; save_inp(); s_b_comment(); } } }
+fn _w585() void { blk4: { peg_alt(&[_]PFn{_w578, _w580, _w581}); if (g.failed) break :blk4; const t = g.rtag; save_inp(); blk3: { peg_alt(&[_]PFn{_w583, _w584}); if (g.failed) break :blk3; const m = g.rtagint; save_inp(); s_b_comment() } }; }
 fn _w586() void { ns_dec_digit(); }
-fn _w587() void { ok_r(); }
+fn _w587() void { ok(); }
 fn _w588() void { match_cp(45); }
 fn _w589() void { match_cp(43); }
-fn _w590() void { ok_r(); }
+fn _w590() void { ok(); }
 fn _w591() void { b_non_content(); }
 fn _w592() void { b_as_line_feed(); }
 fn _w593() void { b_as_line_feed(); }
-fn _w594() void { g.n = g.n; l_strip_empty(); }
-fn _w595() void { g.n = g.n; l_strip_empty(); }
-fn _w596() void { g.n = g.n; l_keep_empty(); }
-fn _w597() void { g.n = g.n; s_indent_le(); }
+fn _w594() void { l_strip_empty(g.n); }
+fn _w595() void { l_strip_empty(g.n); }
+fn _w596() void { l_keep_empty(g.n); }
+fn _w597() void { s_indent_le(g.n); }
 fn _w598() void { b_non_content(); }
 fn _w599() void { peg_seq(&[_]PFn{_w597, _w598}); }
 fn _w600() void { peg_star(_w599); }
-fn _w601() void { g.n = g.n; l_trail_comments(); }
+fn _w601() void { l_trail_comments(g.n); }
 fn _w602() void { opt(_w601); }
-fn _w603() void { g.n = g.n; g.c = "BLOCK-IN"; l_empty(); }
+fn _w603() void { l_empty(g.n, "BLOCK-IN"); }
 fn _w604() void { peg_star(_w603); }
-fn _w605() void { g.n = g.n; l_trail_comments(); }
+fn _w605() void { l_trail_comments(g.n); }
 fn _w606() void { opt(_w605); }
-fn _w607() void { g.n = g.n; s_indent_lt(); }
+fn _w607() void { s_indent_lt(g.n); }
 fn _w608() void { c_nb_comment_text(); }
 fn _w609() void { b_comment(); }
 fn _w610() void { l_comment(); }
@@ -951,22 +951,22 @@ fn _w618() void { match_cp(43); }
 fn _w619() void { parse_sym_fn(_w618, "KEEP"); }
 fn _w620() void { val_fn("CLIP"); }
 fn _w621() void { s_b_comment(); }
-fn _w622() void { g.n = (g.n + g.m); g.t = g.t; l_literal_content(); }
-fn _w623() void { blk6: { peg_alt(&[_]PFn{_w614, _w615}); if (g.failed) break :blk6; g.m = g.rtagint; save_inp(); blk5: { peg_alt(&[_]PFn{_w617, _w619, _w620}); if (g.failed) break :blk5; g.t = g.rtag; save_inp(); peg_seq(&[_]PFn{_w621, _w622}); } } }
-fn _w624() void { g.n = g.n; g.c = "BLOCK-IN"; l_empty(); }
+fn _w622() void { l_literal_content($(( g.n + g.m )), g.t); }
+fn _w623() void { blk6: { peg_alt(&[_]PFn{_w614, _w615}); if (g.failed) break :blk6; const m = g.rtagint; save_inp(); blk5: { peg_alt(&[_]PFn{_w617, _w619, _w620}); if (g.failed) break :blk5; const t = g.rtag; save_inp(); peg_seq(&[_]PFn{_w621, _w622}) } }; }
+fn _w624() void { l_empty(g.n, "BLOCK-IN"); }
 fn _w625() void { peg_star(_w624); }
-fn _w626() void { g.n = g.n; s_indent(); }
+fn _w626() void { s_indent(g.n); }
 fn _w627() void { nb_char(); }
 fn _w628() void { plus_(_w627); }
 fn _w629() void { b_as_line_feed(); }
-fn _w630() void { g.n = g.n; l_nb_literal_text(); }
-fn _w631() void { g.n = g.n; l_nb_literal_text(); }
-fn _w632() void { g.n = g.n; b_nb_literal_next(); }
+fn _w630() void { l_nb_literal_text(g.n); }
+fn _w631() void { l_nb_literal_text(g.n); }
+fn _w632() void { b_nb_literal_next(g.n); }
 fn _w633() void { peg_star(_w632); }
-fn _w634() void { g.t = g.t; b_chomped_last(); }
+fn _w634() void { b_chomped_last(g.t); }
 fn _w635() void { peg_seq(&[_]PFn{_w631, _w633, _w634}); }
 fn _w636() void { opt(_w635); }
-fn _w637() void { g.n = g.n; g.t = g.t; l_chomped_empty(); }
+fn _w637() void { l_chomped_empty(g.n, g.t); }
 fn _w638() void { peg_seq(&[_]PFn{_w636, _w637}); }
 fn _w639() void { match_cp(62); }
 fn _w640() void { ns_dec_digit(); }
@@ -978,126 +978,126 @@ fn _w645() void { match_cp(43); }
 fn _w646() void { parse_sym_fn(_w645, "KEEP"); }
 fn _w647() void { val_fn("CLIP"); }
 fn _w648() void { s_b_comment(); }
-fn _w649() void { g.n = (g.n + g.m); g.t = g.t; l_folded_content(); }
-fn _w650() void { blk8: { peg_alt(&[_]PFn{_w641, _w642}); if (g.failed) break :blk8; g.m = g.rtagint; save_inp(); blk7: { peg_alt(&[_]PFn{_w644, _w646, _w647}); if (g.failed) break :blk7; g.t = g.rtag; save_inp(); peg_seq(&[_]PFn{_w648, _w649}); } } }
-fn _w651() void { g.n = g.n; s_indent(); }
+fn _w649() void { l_folded_content($(( g.n + g.m )), g.t); }
+fn _w650() void { blk8: { peg_alt(&[_]PFn{_w641, _w642}); if (g.failed) break :blk8; const m = g.rtagint; save_inp(); blk7: { peg_alt(&[_]PFn{_w644, _w646, _w647}); if (g.failed) break :blk7; const t = g.rtag; save_inp(); peg_seq(&[_]PFn{_w648, _w649}) } }; }
+fn _w651() void { s_indent(g.n); }
 fn _w652() void { ns_char(); }
 fn _w653() void { nb_char(); }
 fn _w654() void { peg_star(_w653); }
-fn _w655() void { g.n = g.n; s_nb_folded_text(); }
-fn _w656() void { g.n = g.n; g.c = "BLOCK-IN"; b_l_folded(); }
-fn _w657() void { g.n = g.n; s_nb_folded_text(); }
+fn _w655() void { s_nb_folded_text(g.n); }
+fn _w656() void { b_l_folded(g.n, "BLOCK-IN"); }
+fn _w657() void { s_nb_folded_text(g.n); }
 fn _w658() void { peg_seq(&[_]PFn{_w656, _w657}); }
 fn _w659() void { peg_star(_w658); }
-fn _w660() void { g.n = g.n; s_indent(); }
+fn _w660() void { s_indent(g.n); }
 fn _w661() void { s_white(); }
 fn _w662() void { nb_char(); }
 fn _w663() void { peg_star(_w662); }
 fn _w664() void { b_as_line_feed(); }
-fn _w665() void { g.n = g.n; g.c = "BLOCK-IN"; l_empty(); }
+fn _w665() void { l_empty(g.n, "BLOCK-IN"); }
 fn _w666() void { peg_star(_w665); }
-fn _w667() void { g.n = g.n; s_nb_spaced_text(); }
-fn _w668() void { g.n = g.n; b_l_spaced(); }
-fn _w669() void { g.n = g.n; s_nb_spaced_text(); }
+fn _w667() void { s_nb_spaced_text(g.n); }
+fn _w668() void { b_l_spaced(g.n); }
+fn _w669() void { s_nb_spaced_text(g.n); }
 fn _w670() void { peg_seq(&[_]PFn{_w668, _w669}); }
 fn _w671() void { peg_star(_w670); }
-fn _w672() void { g.n = g.n; g.c = "BLOCK-IN"; l_empty(); }
+fn _w672() void { l_empty(g.n, "BLOCK-IN"); }
 fn _w673() void { peg_star(_w672); }
-fn _w674() void { g.n = g.n; l_nb_folded_lines(); }
-fn _w675() void { g.n = g.n; l_nb_spaced_lines(); }
+fn _w674() void { l_nb_folded_lines(g.n); }
+fn _w675() void { l_nb_spaced_lines(g.n); }
 fn _w676() void { peg_alt(&[_]PFn{_w674, _w675}); }
-fn _w677() void { g.n = g.n; l_nb_same_lines(); }
+fn _w677() void { l_nb_same_lines(g.n); }
 fn _w678() void { b_as_line_feed(); }
-fn _w679() void { g.n = g.n; l_nb_same_lines(); }
+fn _w679() void { l_nb_same_lines(g.n); }
 fn _w680() void { peg_seq(&[_]PFn{_w678, _w679}); }
 fn _w681() void { peg_star(_w680); }
-fn _w682() void { g.n = g.n; l_nb_diff_lines(); }
-fn _w683() void { g.t = g.t; b_chomped_last(); }
+fn _w682() void { l_nb_diff_lines(g.n); }
+fn _w683() void { b_chomped_last(g.t); }
 fn _w684() void { peg_seq(&[_]PFn{_w682, _w683}); }
 fn _w685() void { opt(_w684); }
-fn _w686() void { g.n = g.n; g.t = g.t; l_chomped_empty(); }
+fn _w686() void { l_chomped_empty(g.n, g.t); }
 fn _w687() void { peg_seq(&[_]PFn{_w685, _w686}); }
-fn _w688() void { g.n = (g.n + g.m); s_indent(); }
-fn _w689() void { g.n = (g.n + g.m); c_l_block_seq_entry(); }
+fn _w688() void { s_indent($(( g.n + g.m ))); }
+fn _w689() void { c_l_block_seq_entry($(( g.n + g.m ))); }
 fn _w690() void { peg_seq(&[_]PFn{_w688, _w689}); }
 fn _w691() void { plus_(_w690); }
-fn _w692() void { blk9: { detect_indent(g.n); if (g.failed) break :blk9; g.m = g.rtagint; save_inp(); collect_fn(_w691); } }
+fn _w692() void { blk9: { detect_indent(g.n); if (g.failed) break :blk9; const m = g.rtagint; save_inp(); collect_fn(_w691) }; }
 fn _w693() void { match_cp(45); }
 fn _w694() void { ns_char(); }
 fn _w695() void { r_neg(_w694); }
-fn _w696() void { g.n = g.n; g.c = "BLOCK-IN"; s_lblock_indented(); }
-fn _w697() void { g.n = g.m; s_indent(); }
-fn _w698() void { g.n = (g.n + 1 + g.m); ns_l_compact_sequence(); }
-fn _w699() void { g.n = (g.n + 1 + g.m); ns_l_compact_mapping(); }
+fn _w696() void { s_lblock_indented(g.n, "BLOCK-IN"); }
+fn _w697() void { s_indent(g.m); }
+fn _w698() void { ns_l_compact_sequence($(( g.n + 1 + g.m ))); }
+fn _w699() void { ns_l_compact_mapping($(( g.n + 1 + g.m ))); }
 fn _w700() void { peg_alt(&[_]PFn{_w698, _w699}); }
-fn _w701() void { blk10: { detect_indent(0); if (g.failed) break :blk10; g.m = g.rtagint; save_inp(); peg_seq(&[_]PFn{_w697, _w700}); } }
-fn _w702() void { g.n = g.n; g.c = g.c; s_lblock_node(); }
+fn _w701() void { blk10: { detect_indent(0); if (g.failed) break :blk10; const m = g.rtagint; save_inp(); peg_seq(&[_]PFn{_w697, _w700}) }; }
+fn _w702() void { s_lblock_node(g.n, g.c); }
 fn _w703() void { e_node(); }
 fn _w704() void { s_l_comments(); }
 fn _w705() void { peg_seq(&[_]PFn{_w703, _w704}); }
-fn _w706() void { g.n = g.n; c_l_block_seq_entry(); }
-fn _w707() void { g.n = g.n; s_indent(); }
-fn _w708() void { g.n = g.n; c_l_block_seq_entry(); }
+fn _w706() void { c_l_block_seq_entry(g.n); }
+fn _w707() void { s_indent(g.n); }
+fn _w708() void { c_l_block_seq_entry(g.n); }
 fn _w709() void { peg_seq(&[_]PFn{_w707, _w708}); }
 fn _w710() void { peg_star(_w709); }
-fn _w711() void { g.n = (g.n + g.m); s_indent(); }
-fn _w712() void { g.n = (g.n + g.m); ns_l_block_map_entry(); }
+fn _w711() void { s_indent($(( g.n + g.m ))); }
+fn _w712() void { ns_l_block_map_entry($(( g.n + g.m ))); }
 fn _w713() void { peg_seq(&[_]PFn{_w711, _w712}); }
 fn _w714() void { plus_(_w713); }
-fn _w715() void { blk11: { detect_indent(g.n); if (g.failed) break :blk11; g.m = g.rtagint; save_inp(); collect_fn(_w714); } }
-fn _w716() void { g.n = g.n; c_l_block_map_explicit_entry(); }
-fn _w717() void { g.n = g.n; ns_l_block_map_implicit_entry(); }
-fn _w718() void { g.n = g.n; c_l_block_map_explicit_key(); }
-fn _w719() void { g.n = g.n; l_block_map_explicit_value(); }
+fn _w715() void { blk11: { detect_indent(g.n); if (g.failed) break :blk11; const m = g.rtagint; save_inp(); collect_fn(_w714) }; }
+fn _w716() void { c_l_block_map_explicit_entry(g.n); }
+fn _w717() void { ns_l_block_map_implicit_entry(g.n); }
+fn _w718() void { c_l_block_map_explicit_key(g.n); }
+fn _w719() void { l_block_map_explicit_value(g.n); }
 fn _w720() void { e_node(); }
 fn _w721() void { peg_alt(&[_]PFn{_w719, _w720}); }
 fn _w722() void { match_cp(63); }
-fn _w723() void { g.n = g.n; g.c = "BLOCK-OUT"; s_lblock_indented(); }
-fn _w724() void { g.n = g.n; s_indent(); }
+fn _w723() void { s_lblock_indented(g.n, "BLOCK-OUT"); }
+fn _w724() void { s_indent(g.n); }
 fn _w725() void { match_cp(58); }
-fn _w726() void { g.n = g.n; g.c = "BLOCK-OUT"; s_lblock_indented(); }
+fn _w726() void { s_lblock_indented(g.n, "BLOCK-OUT"); }
 fn _w727() void { ns_s_block_map_implicit_key(); }
 fn _w728() void { e_node(); }
 fn _w729() void { peg_alt(&[_]PFn{_w727, _w728}); }
 fn _w730() void { scalar_fn(_w729); }
-fn _w731() void { g.n = g.n; c_l_block_map_implicit_value(); }
+fn _w731() void { c_l_block_map_implicit_value(g.n); }
 fn _w732() void { peg_seq(&[_]PFn{_w730, _w731}); }
-fn _w733() void { g.c = "BLOCK-KEY"; c_s_implicit_json_key(); }
-fn _w734() void { g.c = "BLOCK-KEY"; ns_s_implicit_yaml_key(); }
+fn _w733() void { c_s_implicit_json_key("BLOCK-KEY"); }
+fn _w734() void { ns_s_implicit_yaml_key("BLOCK-KEY"); }
 fn _w735() void { match_cp(58); }
-fn _w736() void { g.n = g.n; g.c = "BLOCK-OUT"; s_lblock_node(); }
+fn _w736() void { s_lblock_node(g.n, "BLOCK-OUT"); }
 fn _w737() void { e_node(); }
 fn _w738() void { s_l_comments(); }
 fn _w739() void { peg_seq(&[_]PFn{_w737, _w738}); }
 fn _w740() void { scalar_fn(_w739); }
 fn _w741() void { peg_alt(&[_]PFn{_w736, _w740}); }
-fn _w742() void { g.n = g.n; ns_l_block_map_entry(); }
-fn _w743() void { g.n = g.n; s_indent(); }
-fn _w744() void { g.n = g.n; ns_l_block_map_entry(); }
+fn _w742() void { ns_l_block_map_entry(g.n); }
+fn _w743() void { s_indent(g.n); }
+fn _w744() void { ns_l_block_map_entry(g.n); }
 fn _w745() void { peg_seq(&[_]PFn{_w743, _w744}); }
 fn _w746() void { peg_star(_w745); }
-fn _w747() void { g.n = g.n; g.c = g.c; s_lblock_in_block(); }
-fn _w748() void { g.n = g.n; s_lflow_in_block(); }
-fn _w749() void { g.n = (g.n + 1); g.c = "FLOW-OUT"; s_separate(); }
-fn _w750() void { g.n = (g.n + 1); g.c = "FLOW-OUT"; ns_flow_node(); }
+fn _w747() void { s_lblock_in_block(g.n, g.c); }
+fn _w748() void { s_lflow_in_block(g.n); }
+fn _w749() void { s_separate($(( g.n + 1 )), "FLOW-OUT"); }
+fn _w750() void { ns_flow_node($(( g.n + 1 )), "FLOW-OUT"); }
 fn _w751() void { s_l_comments(); }
-fn _w752() void { g.n = g.n; g.c = g.c; s_lblock_scalar(); }
-fn _w753() void { g.n = g.n; g.c = g.c; s_lblock_collection(); }
-fn _w754() void { g.n = (g.n + 1); g.c = g.c; s_separate(); }
-fn _w755() void { g.n = (g.n + 1); g.c = g.c; c_ns_properties(); }
-fn _w756() void { g.n = (g.n + 1); g.c = g.c; s_separate(); }
+fn _w752() void { s_lblock_scalar(g.n, g.c); }
+fn _w753() void { s_lblock_collection(g.n, g.c); }
+fn _w754() void { s_separate($(( g.n + 1 )), g.c); }
+fn _w755() void { c_ns_properties($(( g.n + 1 )), g.c); }
+fn _w756() void { s_separate($(( g.n + 1 )), g.c); }
 fn _w757() void { peg_seq(&[_]PFn{_w755, _w756}); }
 fn _w758() void { opt(_w757); }
-fn _w759() void { g.n = g.n; c_lliteral(); }
-fn _w760() void { g.n = g.n; c_lfolded(); }
+fn _w759() void { c_lliteral(g.n); }
+fn _w760() void { c_lfolded(g.n); }
 fn _w761() void { peg_alt(&[_]PFn{_w759, _w760}); }
-fn _w762() void { g.n = (g.n + 1); g.c = g.c; s_separate(); }
-fn _w763() void { g.n = (g.n + 1); g.c = g.c; c_ns_properties(); }
+fn _w762() void { s_separate($(( g.n + 1 )), g.c); }
+fn _w763() void { c_ns_properties($(( g.n + 1 )), g.c); }
 fn _w764() void { peg_seq(&[_]PFn{_w762, _w763}); }
 fn _w765() void { opt(_w764); }
 fn _w766() void { s_l_comments(); }
-fn _w767() void { g.n = seq_spaces(g.n, g.c); lblock_sequence(); }
-fn _w768() void { g.n = g.n; lblock_mapping(); }
+fn _w767() void { lblock_sequence(seq_spaces(g.n, g.c)); }
+fn _w768() void { lblock_mapping(g.n); }
 fn _w769() void { peg_alt(&[_]PFn{_w767, _w768}); }
 fn _w770() void { c_byte_order_mark(); }
 fn _w771() void { opt(_w770); }
@@ -1113,7 +1113,7 @@ fn _w780() void { b_char(); }
 fn _w781() void { s_white(); }
 fn _w782() void { eof_ok(); }
 fn _w783() void { peg_alt(&[_]PFn{_w780, _w781, _w782}); }
-fn _w784() void { g.n = -1; g.c = "BLOCK-IN"; s_lblock_node(); }
+fn _w784() void { s_lblock_node(-1, "BLOCK-IN"); }
 fn _w785() void { c_directives_end(); }
 fn _w786() void { l_bare_document(); }
 fn _w787() void { e_node(); }
@@ -1524,7 +1524,7 @@ fn s_separate_in_line() void {
 
 // [67] S-LINE-PREFIX 
 fn s_line_prefix() void {
-    switch_ctx(g.c, &[_]CtxCase{
+    switch_ctx(c, &[_]CtxCase{
         .{ .ctx = "BLOCK-IN", .func = _w190 },
         .{ .ctx = "BLOCK-OUT", .func = _w191 },
         .{ .ctx = "FLOW-IN", .func = _w192 },
@@ -1534,7 +1534,7 @@ fn s_line_prefix() void {
 
 // [68] S-BLOCK-LINE-PREFIX 
 fn s_block_line_prefix() void {
-    g.n = g.n; s_indent();
+    s_indent(g.n);
 }
 
 // [69] S-FLOW-LINE-PREFIX 
@@ -1594,7 +1594,7 @@ fn s_l_comments() void {
 
 // [80] S-SEPARATE 
 fn s_separate() void {
-    switch_ctx(g.c, &[_]CtxCase{
+    switch_ctx(c, &[_]CtxCase{
         .{ .ctx = "BLOCK-OUT", .func = _w230 },
         .{ .ctx = "BLOCK-IN", .func = _w231 },
         .{ .ctx = "FLOW-OUT", .func = _w232 },
@@ -1726,7 +1726,7 @@ fn c_ns_alias_node() void {
 
 // [105] E-SCALAR 
 fn e_scalar() void {
-    ok_r();
+    ok();
 }
 
 // [106] E-NODE 
@@ -1751,7 +1751,7 @@ fn c_double_quoted() void {
 
 // [110] NB-DOUBLE-TEXT 
 fn nb_double_text() void {
-    switch_ctx(g.c, &[_]CtxCase{
+    switch_ctx(c, &[_]CtxCase{
         .{ .ctx = "FLOW-OUT", .func = _w326 },
         .{ .ctx = "FLOW-IN", .func = _w327 },
         .{ .ctx = "BLOCK-KEY", .func = _w328 },
@@ -1811,7 +1811,7 @@ fn c_single_quoted() void {
 
 // [121] NB-SINGLE-TEXT 
 fn nb_single_text() void {
-    switch_ctx(g.c, &[_]CtxCase{
+    switch_ctx(c, &[_]CtxCase{
         .{ .ctx = "FLOW-OUT", .func = _w368 },
         .{ .ctx = "FLOW-IN", .func = _w369 },
         .{ .ctx = "BLOCK-KEY", .func = _w370 },
@@ -1846,7 +1846,7 @@ fn ns_plain_first() void {
 
 // [127] NS-PLAIN-SAFE 
 fn ns_plain_safe() void {
-    switch_ctx(g.c, &[_]CtxCase{
+    switch_ctx(c, &[_]CtxCase{
         .{ .ctx = "FLOW-OUT", .func = _w401 },
         .{ .ctx = "FLOW-IN", .func = _w402 },
         .{ .ctx = "BLOCK-KEY", .func = _w403 },
@@ -1991,7 +1991,7 @@ fn c_s_implicit_json_key() void {
 
 // [156] NS-FLOW-YAML-CONTENT 
 fn ns_flow_yaml_content() void {
-    g.n = g.n; g.c = g.c; ns_plain();
+    ns_plain(g.n, g.c);
 }
 
 // [157] C-FLOW-JSON-CONTENT 
@@ -2036,7 +2036,7 @@ fn c_chomping_indicator() void {
 
 // [165] B-CHOMPED-LAST 
 fn b_chomped_last() void {
-    switch_ctx(g.t, &[_]CtxCase{
+    switch_ctx(t, &[_]CtxCase{
         .{ .ctx = "STRIP", .func = _w591 },
         .{ .ctx = "CLIP", .func = _w592 },
         .{ .ctx = "KEEP", .func = _w593 },
@@ -2045,7 +2045,7 @@ fn b_chomped_last() void {
 
 // [166] L-CHOMPED-EMPTY 
 fn l_chomped_empty() void {
-    switch_ctx(g.t, &[_]CtxCase{
+    switch_ctx(t, &[_]CtxCase{
         .{ .ctx = "STRIP", .func = _w594 },
         .{ .ctx = "CLIP", .func = _w595 },
         .{ .ctx = "KEEP", .func = _w596 },
