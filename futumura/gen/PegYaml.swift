@@ -153,6 +153,16 @@ func eof_ok(_ inp: Input) -> Result { if inp.atEof() { return ok(inp) }; return 
 
 // ── YAML extensions ──
 
+func bindInt(_ r: Result, _ k: (Int, Input) -> Result) -> Result {
+    if r.fail { return r }
+    return k(r.tagInt, r.rest)
+}
+
+func bindCtx(_ r: Result, _ k: (String, Input) -> Result) -> Result {
+    if r.fail { return r }
+    return k(r.tag, r.rest)
+}
+
 func build(_ inp: Input, _ typ: String, _ f: PFn) -> Result {
     var r = f(inp); if r.fail { return r }
     let node = Ast.branch(typ)
@@ -1414,18 +1424,18 @@ func ns_flow_node(_ inp: Input, _ n: Int, _ c: String) -> Result {
 // [162] C-B-BLOCK-HEADER 
 func c_b_block_header(_ inp: Input, _ n: Int) -> Result {
     return alt(inp, [
-        { (inp: Input) -> Result in return { () -> Result in let r = alt(inp, [
+        { (inp: Input) -> Result in return bindInt(alt(inp, [
             { (inp: Input) -> Result in return parse_int(inp, { (inp: Input) -> Result in return ns_dec_digit(inp) }) },
-            { (inp: Input) -> Result in return detect_indent(inp, n) }]); if r.fail { return r }; let m = r.tagInt; var inp = r.rest; return { () -> Result in let r = alt(inp, [
+            { (inp: Input) -> Result in return detect_indent(inp, n) }]), { m, inp in bindCtx(alt(inp, [
             { (inp: Input) -> Result in return parse_sym(inp, { (inp: Input) -> Result in return match_cp(inp, 45) }, "STRIP") },
             { (inp: Input) -> Result in return parse_sym(inp, { (inp: Input) -> Result in return match_cp(inp, 43) }, "KEEP") },
-            { (inp: Input) -> Result in return val(inp, "CLIP") }]); if r.fail { return r }; let t = r.tag; var inp = r.rest; return s_b_comment(inp) }() }() },
-        { (inp: Input) -> Result in return { () -> Result in let r = alt(inp, [
+            { (inp: Input) -> Result in return val(inp, "CLIP") }]), { t, inp in s_b_comment(inp) }) }) },
+        { (inp: Input) -> Result in return bindCtx(alt(inp, [
             { (inp: Input) -> Result in return parse_sym(inp, { (inp: Input) -> Result in return match_cp(inp, 45) }, "STRIP") },
             { (inp: Input) -> Result in return parse_sym(inp, { (inp: Input) -> Result in return match_cp(inp, 43) }, "KEEP") },
-            { (inp: Input) -> Result in return val(inp, "CLIP") }]); if r.fail { return r }; let t = r.tag; var inp = r.rest; return { () -> Result in let r = alt(inp, [
+            { (inp: Input) -> Result in return val(inp, "CLIP") }]), { t, inp in bindInt(alt(inp, [
             { (inp: Input) -> Result in return parse_int(inp, { (inp: Input) -> Result in return ns_dec_digit(inp) }) },
-            { (inp: Input) -> Result in return detect_indent(inp, n) }]); if r.fail { return r }; let m = r.tagInt; var inp = r.rest; return s_b_comment(inp) }() }() }])
+            { (inp: Input) -> Result in return detect_indent(inp, n) }]), { m, inp in s_b_comment(inp) }) }) }])
 }
 
 // [163] C-INDENTATION-INDICATOR 
@@ -1492,14 +1502,14 @@ func l_trail_comments(_ inp: Input, _ n: Int) -> Result {
 func c_lliteral(_ inp: Input, _ n: Int) -> Result {
     return seq(inp, [
         { (inp: Input) -> Result in return match_cp(inp, 124) },
-        { (inp: Input) -> Result in return { () -> Result in let r = alt(inp, [
+        { (inp: Input) -> Result in return bindInt(alt(inp, [
             { (inp: Input) -> Result in return parse_int(inp, { (inp: Input) -> Result in return ns_dec_digit(inp) }) },
-            { (inp: Input) -> Result in return detect_indent(inp, n) }]); if r.fail { return r }; let m = r.tagInt; var inp = r.rest; return { () -> Result in let r = alt(inp, [
+            { (inp: Input) -> Result in return detect_indent(inp, n) }]), { m, inp in bindCtx(alt(inp, [
             { (inp: Input) -> Result in return parse_sym(inp, { (inp: Input) -> Result in return match_cp(inp, 45) }, "STRIP") },
             { (inp: Input) -> Result in return parse_sym(inp, { (inp: Input) -> Result in return match_cp(inp, 43) }, "KEEP") },
-            { (inp: Input) -> Result in return val(inp, "CLIP") }]); if r.fail { return r }; let t = r.tag; var inp = r.rest; return seq(inp, [
+            { (inp: Input) -> Result in return val(inp, "CLIP") }]), { t, inp in seq(inp, [
             { (inp: Input) -> Result in return s_b_comment(inp) },
-            { (inp: Input) -> Result in return l_literal_content(inp, (n + m), t) }]) }() }() }])
+            { (inp: Input) -> Result in return l_literal_content(inp, (n + m), t) }]) }) }) }])
 }
 
 // [171] L-NB-LITERAL-TEXT 
@@ -1531,14 +1541,14 @@ func l_literal_content(_ inp: Input, _ n: Int, _ t: String) -> Result {
 func c_lfolded(_ inp: Input, _ n: Int) -> Result {
     return seq(inp, [
         { (inp: Input) -> Result in return match_cp(inp, 62) },
-        { (inp: Input) -> Result in return { () -> Result in let r = alt(inp, [
+        { (inp: Input) -> Result in return bindInt(alt(inp, [
             { (inp: Input) -> Result in return parse_int(inp, { (inp: Input) -> Result in return ns_dec_digit(inp) }) },
-            { (inp: Input) -> Result in return detect_indent(inp, n) }]); if r.fail { return r }; let m = r.tagInt; var inp = r.rest; return { () -> Result in let r = alt(inp, [
+            { (inp: Input) -> Result in return detect_indent(inp, n) }]), { m, inp in bindCtx(alt(inp, [
             { (inp: Input) -> Result in return parse_sym(inp, { (inp: Input) -> Result in return match_cp(inp, 45) }, "STRIP") },
             { (inp: Input) -> Result in return parse_sym(inp, { (inp: Input) -> Result in return match_cp(inp, 43) }, "KEEP") },
-            { (inp: Input) -> Result in return val(inp, "CLIP") }]); if r.fail { return r }; let t = r.tag; var inp = r.rest; return seq(inp, [
+            { (inp: Input) -> Result in return val(inp, "CLIP") }]), { t, inp in seq(inp, [
             { (inp: Input) -> Result in return s_b_comment(inp) },
-            { (inp: Input) -> Result in return l_folded_content(inp, (n + m), t) }]) }() }() }])
+            { (inp: Input) -> Result in return l_folded_content(inp, (n + m), t) }]) }) }) }])
 }
 
 // [175] S-NB-FOLDED-TEXT 
@@ -1611,9 +1621,9 @@ func l_folded_content(_ inp: Input, _ n: Int, _ t: String) -> Result {
 
 // [183] L+BLOCK-SEQUENCE 
 func lblock_sequence(_ inp: Input, _ n: Int) -> Result {
-    return build(inp, "SEQUENCE", { (inp: Input) -> Result in return { () -> Result in let r = detect_indent(inp, n); if r.fail { return r }; let m = r.tagInt; var inp = r.rest; return collect(inp, { (inp: Input) -> Result in return plus_(inp, { (inp: Input) -> Result in return seq(inp, [
+    return build(inp, "SEQUENCE", { (inp: Input) -> Result in return bindInt(detect_indent(inp, n), { m, inp in collect(inp, { (inp: Input) -> Result in return plus_(inp, { (inp: Input) -> Result in return seq(inp, [
         { (inp: Input) -> Result in return s_indent(inp, (n + m)) },
-        { (inp: Input) -> Result in return c_l_block_seq_entry(inp, (n + m)) }]) }) }) }() })
+        { (inp: Input) -> Result in return c_l_block_seq_entry(inp, (n + m)) }]) }) }) }) })
 }
 
 // [184] C-L-BLOCK-SEQ-ENTRY 
@@ -1627,11 +1637,11 @@ func c_l_block_seq_entry(_ inp: Input, _ n: Int) -> Result {
 // [185] S-L+BLOCK-INDENTED 
 func s_lblock_indented(_ inp: Input, _ n: Int, _ c: String) -> Result {
     return alt(inp, [
-        { (inp: Input) -> Result in return { () -> Result in let r = detect_indent(inp, 0); if r.fail { return r }; let m = r.tagInt; var inp = r.rest; return seq(inp, [
+        { (inp: Input) -> Result in return bindInt(detect_indent(inp, 0), { m, inp in seq(inp, [
             { (inp: Input) -> Result in return s_indent(inp, m) },
             { (inp: Input) -> Result in return alt(inp, [
                 { (inp: Input) -> Result in return ns_l_compact_sequence(inp, (n + 1 + m)) },
-                { (inp: Input) -> Result in return ns_l_compact_mapping(inp, (n + 1 + m)) }]) }]) }() },
+                { (inp: Input) -> Result in return ns_l_compact_mapping(inp, (n + 1 + m)) }]) }]) }) },
         { (inp: Input) -> Result in return s_lblock_node(inp, n, c) },
         { (inp: Input) -> Result in return seq(inp, [
             { (inp: Input) -> Result in return e_node(inp) },
@@ -1649,9 +1659,9 @@ func ns_l_compact_sequence(_ inp: Input, _ n: Int) -> Result {
 
 // [187] L+BLOCK-MAPPING 
 func lblock_mapping(_ inp: Input, _ n: Int) -> Result {
-    return build(inp, "MAPPING", { (inp: Input) -> Result in return { () -> Result in let r = detect_indent(inp, n); if r.fail { return r }; let m = r.tagInt; var inp = r.rest; return collect(inp, { (inp: Input) -> Result in return plus_(inp, { (inp: Input) -> Result in return seq(inp, [
+    return build(inp, "MAPPING", { (inp: Input) -> Result in return bindInt(detect_indent(inp, n), { m, inp in collect(inp, { (inp: Input) -> Result in return plus_(inp, { (inp: Input) -> Result in return seq(inp, [
         { (inp: Input) -> Result in return s_indent(inp, (n + m)) },
-        { (inp: Input) -> Result in return ns_l_block_map_entry(inp, (n + m)) }]) }) }) }() })
+        { (inp: Input) -> Result in return ns_l_block_map_entry(inp, (n + m)) }]) }) }) }) })
 }
 
 // [188] NS-L-BLOCK-MAP-ENTRY 
@@ -1864,18 +1874,27 @@ func printAst(_ node: Ast, _ depth: Int) {
 
 // ── Main ──
 
-let text: String
-if CommandLine.arguments.count > 1 {
-    text = try! String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
-} else {
-    text = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
+func runMain() {
+    let text: String
+    if CommandLine.arguments.count > 1 {
+        text = try! String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
+    } else {
+        text = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    }
+    let inp = Input(text)
+    let r = l_yaml_stream(inp)
+    if !r.fail {
+        print("OK: \(r.rest.pos) chars")
+        if let ast = r.ast { printAst(ast, 0) }
+    } else {
+        FileHandle.standardError.write("FAIL @\(r.rest.pos): \(r.err)\n".data(using: .utf8)!)
+        _exit(1)
+    }
+    _exit(0)
 }
-let inp = Input(text)
-let r = l_yaml_stream(inp)
-if !r.fail {
-    print("OK: \(r.rest.pos) chars")
-    if let ast = r.ast { printAst(ast, 0) }
-} else {
-    FileHandle.standardError.write("FAIL @\(r.rest.pos): \(r.err)\n".data(using: .utf8)!)
-    exit(1)
-}
+
+// Run with 64MB stack to handle deep PEG recursion
+let thread = Thread { runMain() }
+thread.stackSize = 64 * 1024 * 1024
+thread.start()
+dispatchMain()

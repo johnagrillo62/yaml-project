@@ -367,11 +367,11 @@ static void printAst(YAMLNode *node, int depth) {
 
   (setf (gethash "accessors" cv)
 "static YamlValue* yGet(YamlValue *y, NSString *key) {
-    if (y->tag == YMap) { YamlValue *r = y->m[key]; if (r) return r; }
+    if (y->tag == YMap) { YamlValue *r = [y->m objectForKey:key]; if (r) return r; }
     return [YamlValue nullVal];
 }
 static YamlValue* yAt(YamlValue *y, NSUInteger idx) {
-    if (y->tag == YSeq && idx < y->v.count) return y->v[idx];
+    if (y->tag == YSeq && idx < y->v.count) return [y->v objectAtIndex:idx];
     return [YamlValue nullVal];
 }
 static NSString* yStr(YamlValue *y) { return y->tag == YStr ? y->s : @\"\"; }")
@@ -424,12 +424,12 @@ static NSString* yStr(YamlValue *y) { return y->tag == YStr ? y->s : @\"\"; }")
             if (ch->isLeaf && !name) name = ch->text;
             else val = [self convert:ch];
         }
-        if (name) anchors[name] = val;
+        if (name) [anchors setObject:val forKey:name];
         return val;
     }
     if ([t isEqualToString:@\"ALIAS\"]) {
         for (YAMLNode *ch in node->children) {
-            if (ch->isLeaf && anchors[ch->text]) return anchors[ch->text];
+            if (ch->isLeaf && [anchors objectForKey:ch->text]) return [anchors objectForKey:ch->text];
         }
         return [YamlValue nullVal];
     }
@@ -437,11 +437,11 @@ static NSString* yStr(YamlValue *y) { return y->tag == YStr ? y->s : @\"\"; }")
         NSMutableDictionary *m = [NSMutableDictionary dictionary];
         for (YAMLNode *ch in node->children) {
             if ([ch->type isEqualToString:@\"PAIR\"] && ch->children.count >= 2) {
-                YamlValue *key = [self convert:ch->children[0]];
-                YamlValue *val = [self convert:ch->children[1]];
+                YamlValue *key = [self convert:[ch->children objectAtIndex:0]];
+                YamlValue *val = [self convert:[ch->children objectAtIndex:1]];
                 if ([yStr(key) isEqualToString:@\"<<\"] && val->tag == YMap) {
-                    for (NSString *mk in val->m) { if (!m[mk]) m[mk] = val->m[mk]; }
-                } else { m[yStr(key)] = val; }
+                    for (NSString *mk in val->m) { if (![m objectForKey:mk]) [m setObject:[val->m objectForKey:mk] forKey:mk]; }
+                } else { [m setObject:val forKey:yStr(key)]; }
             }
         }
         return [YamlValue mapVal:m];
@@ -452,14 +452,14 @@ static NSString* yStr(YamlValue *y) { return y->tag == YStr ? y->s : @\"\"; }")
         return [YamlValue seqVal:seq];
     }
     if ([t isEqualToString:@\"DOC\"] || [t isEqualToString:@\"STREAM\"]) {
-        if (node->children.count == 1) return [self convert:node->children[0]];
+        if (node->children.count == 1) return [self convert:[node->children objectAtIndex:0]];
         NSMutableArray *docs = [NSMutableArray array];
         for (YAMLNode *ch in node->children) [docs addObject:[self convert:ch]];
-        return docs.count == 1 ? docs[0] : [YamlValue seqVal:docs];
+        return docs.count == 1 ? [docs objectAtIndex:0] : [YamlValue seqVal:docs];
     }
     if ([t isEqualToString:@\"PAIR\"] && node->children.count >= 2)
-        return [self convert:node->children[1]];
-    if (node->children.count == 1) return [self convert:node->children[0]];
+        return [self convert:[node->children objectAtIndex:1]];
+    if (node->children.count == 1) return [self convert:[node->children objectAtIndex:0]];
     NSMutableArray *items = [NSMutableArray array];
     for (YAMLNode *ch in node->children) [items addObject:[self convert:ch]];
     return [YamlValue seqVal:items];

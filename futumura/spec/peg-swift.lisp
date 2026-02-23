@@ -52,12 +52,12 @@
 
 (def-tgt "let-int"
   (lambda (vname expr rest)
-    (format nil "{ () -> Result in let r = ~A; if r.fail { return r }; let ~A = r.tagInt; var inp = r.rest; return ~A }()"
+    (format nil "bindInt(~A, { ~A, inp in ~A })"
             expr vname rest)))
 
 (def-tgt "let-ctx"
   (lambda (vname expr rest)
-    (format nil "{ () -> Result in let r = ~A; if r.fail { return r }; let ~A = r.tag; var inp = r.rest; return ~A }()"
+    (format nil "bindCtx(~A, { ~A, inp in ~A })"
             expr vname rest)))
 
 ;;; ── Arg compilation ──
@@ -261,6 +261,16 @@ func eof_ok(_ inp: Input) -> Result { if inp.atEof() { return ok(inp) }; return 
 
 "// ── YAML extensions ──
 
+func bindInt(_ r: Result, _ k: (Int, Input) -> Result) -> Result {
+    if r.fail { return r }
+    return k(r.tagInt, r.rest)
+}
+
+func bindCtx(_ r: Result, _ k: (String, Input) -> Result) -> Result {
+    if r.fail { return r }
+    return k(r.tag, r.rest)
+}
+
 func build(_ inp: Input, _ typ: String, _ f: PFn) -> Result {
     var r = f(inp); if r.fail { return r }
     let node = Ast.branch(typ)
@@ -323,21 +333,30 @@ func printAst(_ node: Ast, _ depth: Int) {
 (def-tgt "main-fn"
 "// ── Main ──
 
-let text: String
-if CommandLine.arguments.count > 1 {
-    text = try! String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
-} else {
-    text = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? \"\"
+func runMain() {
+    let text: String
+    if CommandLine.arguments.count > 1 {
+        text = try! String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
+    } else {
+        text = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? \"\"
+    }
+    let inp = Input(text)
+    let r = l_yaml_stream(inp)
+    if !r.fail {
+        print(\"OK: \\(r.rest.pos) chars\")
+        if let ast = r.ast { printAst(ast, 0) }
+    } else {
+        FileHandle.standardError.write(\"FAIL @\\(r.rest.pos): \\(r.err)\\n\".data(using: .utf8)!)
+        _exit(1)
+    }
+    _exit(0)
 }
-let inp = Input(text)
-let r = l_yaml_stream(inp)
-if !r.fail {
-    print(\"OK: \\(r.rest.pos) chars\")
-    if let ast = r.ast { printAst(ast, 0) }
-} else {
-    FileHandle.standardError.write(\"FAIL @\\(r.rest.pos): \\(r.err)\\n\".data(using: .utf8)!)
-    exit(1)
-}")
+
+// Run with 64MB stack to handle deep PEG recursion
+let thread = Thread { runMain() }
+thread.stackSize = 64 * 1024 * 1024
+thread.start()
+dispatchMain()")
 
 (def-tgt "namespace-close" nil)
 (def-tgt "yaml-concerns" nil)

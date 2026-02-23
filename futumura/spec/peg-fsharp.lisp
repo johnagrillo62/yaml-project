@@ -2,6 +2,18 @@
 
 (in-package #:yaml-eval)
 
+;;; ── Helpers ──
+
+(defun indent-block (text n)
+  "Indent every line of TEXT by N spaces."
+  (let ((pad (make-string n :initial-element #\Space)))
+    (with-output-to-string (s)
+      (write-string pad s)
+      (loop for c across text
+            do (write-char c s)
+            when (char= c #\Newline)
+              do (write-string pad s)))))
+
 ;;; ── Identity ──
 
 (def-tgt "target-name" "FSharp")
@@ -25,22 +37,28 @@
 (def-tgt "ref-wrap"
   (lambda (body env)
     (declare (ignore env))
-    (format nil "(fun inp -> (~A))" body)))
+    (if (find #\Newline body)
+        (format nil "(fun inp ->~%~A)"
+                (indent-block body 4))
+        (format nil "(fun inp -> ~A)" body))))
 
 (def-tgt "box-wrap"
   (lambda (body env)
     (declare (ignore env))
-    (format nil "(fun inp -> (~A))" body)))
+    (if (find #\Newline body)
+        (format nil "(fun inp ->~%~A)"
+                (indent-block body 4))
+        (format nil "(fun inp -> ~A)" body))))
 
 ;;; ── Seq/Alt ──
 
 (def-tgt "seq-emit"
   (lambda (wrapped-fns)
-    (format nil "pegSeq [~{~A~^; ~}] inp" wrapped-fns)))
+    (format nil "pegSeq ([~{~A~^; ~}]) inp" wrapped-fns)))
 
 (def-tgt "alt-emit"
   (lambda (wrapped-fns)
-    (format nil "pegAlt [~{~A~^; ~}] inp" wrapped-fns)))
+    (format nil "pegAlt ([~{~A~^; ~}]) inp" wrapped-fns)))
 
 ;;; ── Switch ──
 
@@ -55,12 +73,12 @@
 
 (def-tgt "let-int"
   (lambda (vname expr rest)
-    (format nil "bindInt (fun inp -> ~A) (fun ~A -> fun inp -> ~A) inp"
+    (format nil "let r_ =~%    ~A~%if r_.failed then r_~%else~%let ~A = r_.tagInt~%let inp = r_.rest~%~A"
             expr vname rest)))
 
 (def-tgt "let-ctx"
   (lambda (vname expr rest)
-    (format nil "bindCtx (fun inp -> ~A) (fun ~A -> fun inp -> ~A) inp"
+    (format nil "let r_ =~%    ~A~%if r_.failed then r_~%else~%let ~A = r_.tag~%let inp = r_.rest~%~A"
             expr vname rest)))
 
 ;;; ── Arg compilation ──
@@ -269,15 +287,7 @@ and sol inp =
     if inp.col = 0 then okR inp else failR inp \"sol\"
 
 and eofOk inp =
-    if atEof inp then okR inp else failR inp \"eof\"
-
-and bindInt (f: Input -> Result) (g: int -> Input -> Result) inp =
-    let r = f inp
-    if r.failed then r else g r.tagInt r.rest
-
-and bindCtx (f: Input -> Result) (g: string -> Input -> Result) inp =
-    let r = f inp
-    if r.failed then r else g r.tag r.rest"
+    if atEof inp then okR inp else failR inp \"eof\""
 
 "// ── YAML extensions ──
 

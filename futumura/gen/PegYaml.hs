@@ -250,7 +250,7 @@ collect :: PFn -> PFn
 collect = collectP
 
 detect_indent :: Int -> PFn
-detect_indent n inp = detectIndent inp n
+detect_indent n inp = detectIndent n inp
 
 parse_int :: PFn -> PFn
 parse_int = parseIntP
@@ -284,8 +284,8 @@ scalarP f inp =
 collectP :: PFn -> PFn
 collectP f inp = f inp
 
-detectIndent :: Input -> Int -> Result
-detectIndent inp n =
+detectIndent :: Int -> Input -> Result
+detectIndent n inp =
   let s = src inp
       len = length s
       i = pos inp

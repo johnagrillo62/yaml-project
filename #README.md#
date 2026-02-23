@@ -77,11 +77,20 @@ This means every projected parser is structurally identical to the spec. If the 
 
 **How new languages are added**
 
-Each target language needs a *target spec* — approximately 300-500 lines that tells the projector how the language expresses functions, closures, sequences, alternatives, and pattern matching. This is the only hand-written part, and AI can create the quickly.
+Each target language needs a *target spec* — approximately 300-500
+lines that tells the projector how the language expresses functions,
+closures, sequences, alternatives, and pattern matching. This is the
+only hand-written part, and AI can create the quickly.
 
-Given an existing target spec as a reference, AI can produce a new spec for any language in a single conversation. The projector then generates the complete parser — 1800-2200 lines — in seconds. The output is deterministic: the same grammar and target spec always produce the same parser.
+Given an existing target spec as a reference, AI can produce a new
+spec for any language in a single conversation. The projector then
+generates the complete parser — 1800-2200 lines — in seconds. The
+output is deterministic: the same grammar and target spec always
+produce the same parser.
 
-The target spec is small enough to audit by hand. The projected output is verifiable against the YAML Test Suite. The grammar is readable and corresponds 1:1 with the YAML 1.2 specification.
+The target spec is small enough to audit by hand. The projected output
+is verifiable against the YAML Test Suite. The grammar is readable and
+corresponds 1:1 with the YAML 1.2 specification.
 
 ## Architecture
 

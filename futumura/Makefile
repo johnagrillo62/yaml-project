@@ -8,6 +8,10 @@ PROJECTOR  := build-yaml.lisp
 TEST_DIR   := yaml-test-suite
 SHELL      := /bin/bash
 
+# ── Platform detection ────────────────────────────────────────
+
+UNAME_S := $(shell uname -s)
+
 # ── Generated files ──────────────────────────────────────────
 
 GEN_BASH    := gen/peg_yaml.sh
@@ -32,6 +36,7 @@ GEN_ZIG     := gen/peg_yaml.zig
 
 BIN_CPP     := bin/peg_yaml_cpp
 BIN_CSHARP  := bin/PegYaml.exe
+BIN_FSHARP  := bin/PegYaml_fs
 BIN_GO      := bin/peg_yaml_go
 BIN_HASKELL := bin/PegYaml_hs
 BIN_JAVA    := bin/YamlReader.jar
@@ -95,18 +100,50 @@ build-csharp: $(GEN_CSHARP)
 		echo "C#: no compiler found (need dotnet or mcs)"; exit 1; \
 	fi
 
+build-fsharp: $(GEN_FSHARP)
+	@mkdir -p bin/fsharp
+	@if [ ! -f bin/fsharp/fsharp.fsproj ]; then \
+		cd bin/fsharp && dotnet new console -lang F# --force -o . >/dev/null 2>&1; \
+	fi
+	cp $(GEN_FSHARP) bin/fsharp/Program.fs
+	cd bin/fsharp && dotnet build -c Release -o ../fsharp-out >/dev/null 2>&1
+
 build-haskell: $(GEN_HASKELL)
 	@mkdir -p bin
 	ghc -O2 -o $(BIN_HASKELL) $(GEN_HASKELL)
 
 build-objc: $(GEN_OBJC)
 	@mkdir -p bin
-	clang -framework Foundation -O2 -o $(BIN_OBJC) $(GEN_OBJC)
+ifeq ($(UNAME_S),Darwin)
+	clang -framework Foundation -O2 -fblocks -o $(BIN_OBJC) $(GEN_OBJC)
+else
+	@# ── Linux/GNUstep prerequisites (run once) ──
+	@# sudo apt install gnustep-devel gobjc clang libblocksruntime-dev libobjc-13-dev
+	@#
+	@# If build fails with 'objc/blocks_runtime.h' not found:
+	@#   sudo mkdir -p /usr/include/objc
+	@#   sudo ln -sf /usr/include/Block.h /usr/include/objc/blocks_runtime.h
+	@#
+	@# If build fails with 'cannot find -lobjc':
+	@#   sudo ln -sf /usr/lib/gcc/x86_64-linux-gnu/13/libobjc.so /usr/lib/x86_64-linux-gnu/libobjc.so
+	@if [ ! -f /usr/include/objc/blocks_runtime.h ] && [ -f /usr/include/Block.h ]; then \
+		echo "NOTE: creating symlink for objc/blocks_runtime.h (needs sudo)"; \
+		sudo mkdir -p /usr/include/objc && \
+		sudo ln -sf /usr/include/Block.h /usr/include/objc/blocks_runtime.h; \
+	fi
+	@if [ ! -f /usr/lib/x86_64-linux-gnu/libobjc.so ] && [ -f /usr/lib/gcc/x86_64-linux-gnu/13/libobjc.so ]; then \
+		echo "NOTE: creating symlink for libobjc.so (needs sudo)"; \
+		sudo ln -sf /usr/lib/gcc/x86_64-linux-gnu/13/libobjc.so /usr/lib/x86_64-linux-gnu/libobjc.so; \
+	fi
+	clang $$(gnustep-config --objc-flags) -fblocks \
+		-I$$(find /usr/lib/gcc -name objc.h -printf '%h\n' 2>/dev/null | head -1)/.. \
+		-O2 -o $(BIN_OBJC) $(GEN_OBJC) \
+		$$(gnustep-config --base-libs) -lBlocksRuntime
+endif
 
 build-ocaml: $(GEN_OCAML)
 	@mkdir -p bin
-	ocamlfind ocamlopt -package str -linkpkg -o $(BIN_OCAML) $(GEN_OCAML) 2>/dev/null || \
-	ocamlopt -o $(BIN_OCAML) $(GEN_OCAML)
+	ocamlopt -o $(BIN_OCAML) unix.cmxa $(GEN_OCAML)
 
 build-swift: $(GEN_SWIFT)
 	@mkdir -p bin
@@ -189,7 +226,7 @@ test:
 	@which ocamlopt >/dev/null 2>&1 && $(MAKE) --no-print-directory test-ocaml || echo "OCaml: SKIPPED (ocamlopt not found)"
 	@which erlc >/dev/null 2>&1 && $(MAKE) --no-print-directory test-erlang || echo "Erlang: SKIPPED (erlc not found)"
 	@which clang >/dev/null 2>&1 && $(MAKE) --no-print-directory test-objc || echo "Objective-C: SKIPPED (clang not found)"
-	@(which fsharpc >/dev/null 2>&1 || which dotnet >/dev/null 2>&1) && $(MAKE) --no-print-directory test-fsharp || echo "F#: SKIPPED (fsharpc/dotnet not found)"
+	@which dotnet >/dev/null 2>&1 && $(MAKE) --no-print-directory test-fsharp || echo "F#: SKIPPED (dotnet not found)"
 
 test-python: $(GEN_PYTHON)
 	$(call run_test,python3 $(GEN_PYTHON),Python)
@@ -218,6 +255,9 @@ test-kotlin: build-kotlin
 test-csharp: build-csharp
 	$(call run_test,mono $(BIN_CSHARP),C#)
 
+test-fsharp: build-fsharp
+	$(call run_test,dotnet bin/fsharp-out/fsharp.dll,F#)
+
 test-haskell: build-haskell
 	$(call run_test,$(BIN_HASKELL),Haskell)
 
@@ -236,15 +276,9 @@ test-zig: build-zig
 test-erlang: build-erlang
 	$(call run_test,escript $(GEN_ERLANG),Erlang)
 
-test-fsharp: $(GEN_FSHARP)
-	@mkdir -p bin
-	@(which fsharpc >/dev/null 2>&1 && fsharpc --out:bin/PegYaml_fs.exe $(GEN_FSHARP)) || \
-	 (which dotnet >/dev/null 2>&1 && dotnet fsi --strict-indentation- $(GEN_FSHARP))
-	$(call run_test,mono bin/PegYaml_fs.exe,F#)
-
 test-all: test-python test-lua test-bash test-go test-cpp test-rust \
           test-java test-kotlin test-csharp test-haskell test-objc \
-          test-ocaml test-swift test-zig test-erlang
+          test-ocaml test-swift test-zig test-erlang test-fsharp
 
 # ── Check installed toolchains ────────────────────────────────
 
@@ -259,19 +293,20 @@ check:
 	@which g++      >/dev/null 2>&1 && echo "  C++:         $$(g++ --version | head -1)"   || echo "  C++:         NOT FOUND"
 	@which rustc    >/dev/null 2>&1 && echo "  Rust:        $$(rustc --version)"            || echo "  Rust:        NOT FOUND"
 	@which dotnet mcs >/dev/null 2>&1 && echo "  C#:          $$(dotnet --version 2>&1 || mcs --version 2>&1)" || echo "  C#:          NOT FOUND"
+	@which dotnet   >/dev/null 2>&1 && echo "  F#:          $$(dotnet --version 2>&1)"     || echo "  F#:          NOT FOUND"
 	@which ghc      >/dev/null 2>&1 && echo "  Haskell:     $$(ghc --version)"              || echo "  Haskell:     NOT FOUND"
 	@which swiftc   >/dev/null 2>&1 && echo "  Swift:       $$(swiftc --version 2>&1 | head -1)" || echo "  Swift:       NOT FOUND"
 	@which zig      >/dev/null 2>&1 && echo "  Zig:         $$(zig version)"                || echo "  Zig:         NOT FOUND"
 	@which ocamlopt >/dev/null 2>&1 && echo "  OCaml:       $$(ocamlopt -version)"          || echo "  OCaml:       NOT FOUND"
 	@which erlc     >/dev/null 2>&1 && echo "  Erlang:      found"                          || echo "  Erlang:      NOT FOUND"
 	@which clang    >/dev/null 2>&1 && echo "  Objective-C: $$(clang --version | head -1)"  || echo "  Objective-C: NOT FOUND"
-	@which fsharpc dotnet >/dev/null 2>&1 && echo "  F#:          found"                    || echo "  F#:          NOT FOUND"
+	@gnustep-config --version >/dev/null 2>&1 && echo "  GNUstep:     $$(gnustep-config --version)" || echo "  GNUstep:     NOT FOUND (needed for ObjC on Linux)"
 
 # ── Clean ────────────────────────────────────────────────────
 
 clean:
 	rm -rf bin/
-	rm -f gen/*.class
+	rm -f gen/*.class gen/*.o gen/*.hi
 
 distclean: clean
 	rm -rf gen/
