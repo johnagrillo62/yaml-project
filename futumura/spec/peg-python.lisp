@@ -99,12 +99,6 @@
 
 (def-tgt "header"
 "#!/usr/bin/env python3
-# ════════════════════════════════════════════════════════════════
-# yaml_reader.py — YAML 1.2 parser, projected from yaml-grammar.scm
-# ════════════════════════════════════════════════════════════════
-# Generated. DO NOT EDIT — regenerate from the grammar.
-# ════════════════════════════════════════════════════════════════
-
 import sys")
 
 ;;; ── Runtime ──

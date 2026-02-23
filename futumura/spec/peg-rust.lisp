@@ -119,11 +119,6 @@
 
 (def-tgt "header"
 "// ════════════════════════════════════════════════════════════════
-// yaml_reader.rs — YAML 1.2 parser, projected from yaml-grammar.scm
-// ════════════════════════════════════════════════════════════════
-// Generated. DO NOT EDIT — regenerate from the grammar.
-// ════════════════════════════════════════════════════════════════
-
 #![allow(non_snake_case, unused_parens, unused_variables, dead_code, unused_mut)]
 #![allow(clippy::all)]
 
@@ -322,5 +317,4 @@ fn print_ast(node: &Ast, depth: usize) {
 
 ;;; ── Concerns (native API layer) ──
 
-(load "emit/yaml-concerns.lisp")
-(def-tgt "yaml-concerns" *yaml-concerns-rust*)
+(def-tgt "yaml-concerns" nil)

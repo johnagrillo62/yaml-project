@@ -104,11 +104,6 @@
 
 (def-tgt "header"
 "// ════════════════════════════════════════════════════════════════
-// yaml-reader.cpp — YAML 1.2 parser, projected from yaml-grammar.scm
-// ════════════════════════════════════════════════════════════════
-// Generated. DO NOT EDIT — regenerate from the grammar.
-// ════════════════════════════════════════════════════════════════
-
 #include <string>
 #include <string_view>
 #include <vector>

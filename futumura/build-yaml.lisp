@@ -41,11 +41,25 @@
 ;;; ═══════════════════════════════════════════════════════════════════
 
 (defparameter *peg-emitters*
-  '(("go"      "spec/peg-go.lisp"     "yaml_reader.go")
-    ("python"  "spec/peg-python.lisp" "yaml_reader.py")
-    ("objc"    "spec/peg-objc.lisp"   "YAMLReader.m")
-    ("cpp-peg" "spec/peg-cpp.lisp"    "yaml-reader-peg.cpp")
-    ("rust-peg" "spec/peg-rust.lisp"  "yaml_reader_peg.rs")))
+  '(
+    ("bash"     "spec/peg-bash.lisp"     "peg_yaml.sh")
+    ("cpp"      "spec/peg-cpp.lisp"      "peg_yaml.cpp")
+    ("csharp"   "spec/peg-csharp.lisp"   "PegYaml.cs")
+    ("erlang"   "spec/peg-erlang.lisp"   "peg_yaml.erl")
+    ("fsharp"   "spec/peg-fsharp.lisp"   "PegYaml.fs")
+    ("go"       "spec/peg-go.lisp"       "peg_yaml.go")
+    ("haskell"  "spec/peg-haskell.lisp"  "PegYaml.hs")
+    ("kotlin"   "spec/peg-kotlin.lisp"   "PegYaml.kt")
+    ("lua"      "spec/peg-lua.lisp"      "peg_yaml.lua")
+    ("objc"     "spec/peg-objc.lisp"     "PegYaml.m")
+    ("ocaml"    "spec/peg-ocaml.lisp"    "peg_yaml.ml")
+    ("python"   "spec/peg-python.lisp"   "peg_yaml.py")
+    ("rust"     "spec/peg-rust.lisp"     "peg_yaml.rs")
+    ("swift"    "spec/peg-swift.lisp"    "PegYaml.swift")
+    ("x86"      "spec/peg-x86.lisp"      "peg_yaml.x86")
+    ("zig"      "spec/peg-zig.lisp"      "peg_yaml.zig")
+    )
+  )
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; BUILD

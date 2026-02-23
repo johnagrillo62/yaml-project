@@ -100,11 +100,6 @@
 
 (def-tgt "header"
 "// ════════════════════════════════════════════════════════════════
-// yaml_reader.go — YAML 1.2 parser, projected from yaml-grammar.scm
-// ════════════════════════════════════════════════════════════════
-// Generated. DO NOT EDIT — regenerate from the grammar.
-// ════════════════════════════════════════════════════════════════
-
 package main
 
 import (

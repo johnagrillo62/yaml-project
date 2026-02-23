@@ -107,15 +107,6 @@
 
 (def-tgt "header"
 "// ════════════════════════════════════════════════════════════════
-// YAMLReader.m — YAML 1.2 parser, projected from yaml-grammar.scm
-// ════════════════════════════════════════════════════════════════
-// Generated. DO NOT EDIT — regenerate from the grammar.
-//
-// macOS:  clang -fobjc-arc -framework Foundation -o yaml_objc YAMLReader.m
-// Linux:  clang -fblocks $(gnustep-config --objc-flags) -I<objc-include> \\
-//           -o yaml_objc YAMLReader.m $(gnustep-config --base-libs) -lBlocksRuntime
-// ════════════════════════════════════════════════════════════════
-
 #import <Foundation/Foundation.h>")
 
 ;;; ── Runtime ──

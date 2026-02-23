@@ -30,6 +30,63 @@
   (setf (gethash key *tgt*) val))
 
 ;;; ═══════════════════════════════════════════════════════════════════
+;;; CALL FORMATTING — C-style f(inp, a, b) vs Haskell f a b inp
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defun inp-name () (or (tgt "inp-name") "inp"))
+
+(defun tcall (fn &rest args)
+  "Format a combinator call."
+  (let ((style (tgt "call-style"))
+        (iv (inp-name)))
+    (cond
+      ((and style (string= style "haskell"))
+       (if args
+           (format nil "~A ~{~A ~}~A" fn args iv)
+           (format nil "~A ~A" fn iv)))
+      ((and style (or (string= style "bash") (string= style "wrapper")))
+       (if args
+           (format nil "~A ~{~A~^ ~}" fn args)
+           fn))
+      (t
+       (if args
+           (format nil "~A(~A, ~{~A~^, ~})" fn iv args)
+           (format nil "~A(~A)" fn iv))))))
+
+(defun trcall (fn &rest args)
+  "Format a rule call."
+  (let ((style (tgt "call-style"))
+        (iv (inp-name)))
+    (cond
+      ((and style (string= style "haskell"))
+       (if args
+           (format nil "~A ~A ~{~A~^ ~}" fn iv args)
+           (format nil "~A ~A" fn iv)))
+      ((and style (or (string= style "bash") (string= style "wrapper")))
+       (if args
+           (format nil "~A ~{~A~^ ~}" fn args)
+           fn))
+      (t
+       (if args
+           (format nil "~A(~A, ~{~A~^, ~})" fn iv args)
+           (format nil "~A(~A)" fn iv))))))
+
+(defun tcall0 (fn &rest args)
+  "Format a non-PFn call (no inp parameter)."
+  (let ((style (tgt "call-style")))
+    (cond
+      ((and style (string= style "haskell"))
+       (if args
+           (format nil "(~A ~{~A~^ ~})" fn args)
+           fn))
+      ((and style (string= style "bash"))
+       (if args
+           (format nil "$(~A ~{~A~^ ~})" fn args)
+           (format nil "$~A" fn)))
+      (t
+       (format nil "~A(~{~A~^, ~})" fn args)))))
+
+;;; ═══════════════════════════════════════════════════════════════════
 ;;; IDENTIFIER — dispatches to target
 ;;; ═══════════════════════════════════════════════════════════════════
 
@@ -58,16 +115,75 @@
   (when text (princ text *out*) (terpri *out*)))
 
 ;;; ═══════════════════════════════════════════════════════════════════
+;;; BASH WRAPPER FUNCTIONS — bash can't pass expressions as args,
+;;; so we generate named wrapper functions and pass the name.
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defvar *bash-wrappers* nil
+  "Accumulated wrapper function definitions for bash target.")
+(defvar *bash-wrapper-counter* 0)
+
+(defun bash-style-p ()
+  (let ((s (tgt "call-style")))
+    (and s (string= s "bash"))))
+
+(defun make-bash-wrapper (body)
+  "Generate a named wrapper function for BODY, return the name."
+  (let ((name (format nil "_w~D" (incf *bash-wrapper-counter*))))
+    (push (format nil "~A() { ~A; }" name body) *bash-wrappers*)
+    name))
+
+;;; ═══════════════════════════════════════════════════════════════════
 ;;; WRAP — lambda/closure wrapping, dispatched to target
 ;;; ═══════════════════════════════════════════════════════════════════
 
 (defun lw (body env)
   "Ref-closure wrap: for star/plus/opt/neg/etc (called by reference)."
-  (funcall (tgt "ref-wrap") body env))
+  (if (bash-style-p)
+      (make-bash-wrapper body)
+      (funcall (tgt "ref-wrap") body env)))
 
 (defun bw (body env)
   "Box-closure wrap: for seq/alt (stored in collection)."
-  (funcall (tgt "box-wrap") body env))
+  (if (bash-style-p)
+      (make-bash-wrapper body)
+      (funcall (tgt "box-wrap") body env)))
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; COMBINATOR NAME RESOLUTION — allows target override via comb-* keys
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defvar *comb-defaults* (make-hash-table :test 'equal)
+  "Default combinator names (C-style) when no comb-* override exists.")
+
+(progn
+  (setf (gethash "match-cp"    *comb-defaults*) "match_cp")
+  (setf (gethash "match-range" *comb-defaults*) "match_range")
+  (setf (gethash "match-str"   *comb-defaults*) "match_str")
+  (setf (gethash "star"        *comb-defaults*) "star")
+  (setf (gethash "plus"        *comb-defaults*) "plus_")
+  (setf (gethash "opt"         *comb-defaults*) "opt")
+  (setf (gethash "neg"         *comb-defaults*) "neg")
+  (setf (gethash "rep"         *comb-defaults*) "rep")
+  (setf (gethash "ahead"       *comb-defaults*) "ahead")
+  (setf (gethash "behind"      *comb-defaults*) "behind")
+  (setf (gethash "minus"       *comb-defaults*) "minus")
+  (setf (gethash "build"       *comb-defaults*) "build")
+  (setf (gethash "scalar"      *comb-defaults*) "scalar")
+  (setf (gethash "collect"     *comb-defaults*) "collect")
+  (setf (gethash "sol"         *comb-defaults*) "sol")
+  (setf (gethash "eof"         *comb-defaults*) "eof_ok")
+  (setf (gethash "ok"          *comb-defaults*) "ok")
+  (setf (gethash "detect"      *comb-defaults*) "detect_indent")
+  (setf (gethash "parse-int"   *comb-defaults*) "parse_int")
+  (setf (gethash "parse-sym"   *comb-defaults*) "parse_sym")
+  (setf (gethash "val"         *comb-defaults*) "val"))
+
+(defun comb (key)
+  "Resolve a combinator name. Check for comb-KEY override in target, else use default."
+  (or (tgt (concatenate 'string "comb-" key))
+      (gethash key *comb-defaults*)
+      key))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; EXPRESSION COMPILER — target-independent
@@ -78,54 +194,56 @@
 (defun ce (expr env)
   "Compile grammar expression → target language Result expression."
   (cond
-    ((null expr) "ok(inp)")
-    ((eq expr 'EMPTY) "ok(inp)")
-    ((integerp expr) (format nil "match_cp(inp, ~D)" expr))
+    ((null expr) (tcall (comb "ok")))
+    ((eq expr 'EMPTY) (tcall (comb "ok")))
+    ((integerp expr) (tcall (comb "match-cp") (format nil "~D" expr)))
     ((symbolp expr)
      (if (member expr env) (peg-ident expr)
-         (format nil "~A(inp)" (peg-ident expr))))
+         (tcall (peg-ident expr))))
     ((listp expr)
      (let ((op (car expr)) (args (cdr expr)))
        (case op
-         (EMPTY  "ok(inp)")
+         (EMPTY  (tcall (comb "ok")))
          (CHAR   (ce-char (car args) env))
          (HEX    (ce-hex (car args)))
          (RANGE  (ce-range (car args) (cadr args)))
-         (STR    (format nil "match_str(inp, ~S)" (string (car args))))
+         (STR    (let ((s (format nil "~S" (string (car args)))))
+                   (tcall (comb "match-str") (if (tgt "str-wrap") (funcall (tgt "str-wrap") s) s))))
          (SEQ    (ce-seq args env))
          (ALT    (ce-alt args env))
-         (STAR   (format nil "star(inp, ~A)" (lw (ce (car args) env) env)))
-         (PLUS   (format nil "plus_(inp, ~A)" (lw (ce (car args) env) env)))
-         (OPT    (format nil "opt(inp, ~A)" (lw (ce (car args) env) env)))
+         (STAR   (tcall (comb "star") (lw (ce (car args) env) env)))
+         (PLUS   (tcall (comb "plus") (lw (ce (car args) env) env)))
+         (OPT    (tcall (comb "opt") (lw (ce (car args) env) env)))
          (REF    (ce-ref (car args) (cdr args) env))
-         (NOT    (format nil "neg(inp, ~A)" (lw (ce (car args) env) env)))
-         (MINUS  (format nil "minus(inp, ~A, ~A)"
-                         (lw (ce (car args) env) env) (lw (ce (cadr args) env) env)))
-         (REPEAT (format nil "rep(inp, ~A, ~A)"
-                         (ca (car args) env) (lw (ce (cadr args) env) env)))
+         (NOT    (tcall (comb "neg") (lw (ce (car args) env) env)))
+         (MINUS  (tcall (comb "minus") (lw (ce (car args) env) env) (lw (ce (cadr args) env) env)))
+         (REPEAT (tcall (comb "rep") (ca (car args) env) (lw (ce (cadr args) env) env)))
          (SWITCH (ce-switch (car args) (cdr args) env))
-         (LOOKAHEAD  (format nil "ahead(inp, ~A)" (lw (ce (car args) env) env)))
-         (LOOKBEHIND (format nil "behind(inp, ~A)" (lw (ce (car args) env) env)))
-         (STARTOFLINE "sol(inp)")
-         (ENDOFINPUT  "eof_ok(inp)")
-         (BUILD   (format nil "build(inp, ~S, ~A)"
-                          (string (car args)) (lw (ce (cadr args) env) env)))
-         (SCALAR  (format nil "scalar(inp, ~A)" (lw (ce (car args) env) env)))
-         (COLLECT (format nil "collect(inp, ~A)" (lw (ce (car args) env) env)))
+         (LOOKAHEAD  (tcall (comb "ahead") (lw (ce (car args) env) env)))
+         (LOOKBEHIND (tcall (comb "behind") (lw (ce (car args) env) env)))
+         (STARTOFLINE (tcall (comb "sol")))
+         (ENDOFINPUT  (tcall (comb "eof")))
+         (BUILD   (let ((s (format nil "~S" (string (car args)))))
+                   (tcall (comb "build") (if (tgt "str-wrap") (funcall (tgt "str-wrap") s) s) (lw (ce (cadr args) env) env))))
+         (SCALAR  (tcall (comb "scalar") (lw (ce (car args) env) env)))
+         (COLLECT (tcall (comb "collect") (lw (ce (car args) env) env)))
          (LET           (ce-let (car args) (cadr args) env))
-         (DETECT-INDENT (format nil "detect_indent(inp, ~A)" (ca (car args) env)))
-         (PARSE-INT     (format nil "parse_int(inp, ~A)" (lw (ce (car args) env) env)))
-         (PARSE-SYM     (format nil "parse_sym(inp, ~A, ~S)"
-                                (lw (ce (car args) env) env) (string (cadr args))))
-         (VAL           (format nil "val(inp, ~S)" (string (car args))))
+         (DETECT-INDENT (tcall (comb "detect") (ca (car args) env)))
+         (PARSE-INT     (tcall (comb "parse-int") (lw (ce (car args) env) env)))
+         (PARSE-SYM     (let ((s (format nil "~S" (string (cadr args)))))
+                          (tcall (comb "parse-sym") (lw (ce (car args) env) env) (if (tgt "str-wrap") (funcall (tgt "str-wrap") s) s))))
+         (VAL           (let ((s (format nil "~S" (string (car args)))))
+                          (tcall (comb "val") (if (tgt "str-wrap") (funcall (tgt "str-wrap") s) s))))
          ((+ -)  (ca expr env))
-         (IN-FLOW    (format nil "in_flow(~A)" (ca (cadr expr) env)))
-         (SEQ-SPACES (format nil "seq_spaces(~A, ~A)"
-                             (ca (cadr expr) env) (ca (caddr expr) env)))
+         (IN-FLOW    (tcall0 "in_flow" (ca (cadr expr) env)))
+         (SEQ-SPACES (tcall0 "seq_spaces" (ca (cadr expr) env) (ca (caddr expr) env)))
          (t (let ((rd (gethash op (gram-rules *gram*))))
               (if rd
-                  (format nil "~A(inp~{, ~A~})" (peg-ident op)
-                          (mapcar (lambda (a) (ca a env)) args))
+                  (if (cdr args)
+                      (apply #'trcall (peg-ident op) (mapcar (lambda (a) (ca a env)) args))
+                      (if args
+                          (trcall (peg-ident op) (ca (car args) env))
+                          (trcall (peg-ident op))))
                   (format nil "/* UNKNOWN ~S */" expr)))))))
     (t (format nil "/* ?? ~S */" expr))))
 
@@ -133,27 +251,32 @@
 
 (defun ce-char (x env)
   (cond
-    ((integerp x) (format nil "match_cp(inp, ~D)" x))
-    ((and (symbolp x) (string= (symbol-name x) "SQUOTE")) "match_cp(inp, 39)")
-    ((and (symbolp x) (string= (symbol-name x) "DQUOTE")) "match_cp(inp, 34)")
+    ((integerp x) (tcall (comb "match-cp") (format nil "~D" x)))
+    ((and (symbolp x) (string= (symbol-name x) "SQUOTE")) (tcall (comb "match-cp") "39"))
+    ((and (symbolp x) (string= (symbol-name x) "DQUOTE")) (tcall (comb "match-cp") "34"))
     ((and (symbolp x) (member x env))
-     (format nil "match_cp(inp, ~A)" (funcall (tgt "char-cast") (peg-ident x))))
-    ((symbolp x) (format nil "match_cp(inp, ~D)" (char-code (char (symbol-name x) 0))))
-    (t (format nil "match_cp(inp, ~D)" x))))
+     (tcall (comb "match-cp") (funcall (tgt "char-cast") (peg-ident x))))
+    ((symbolp x) (tcall (comb "match-cp") (format nil "~D" (char-code (char (symbol-name x) 0)))))
+    (t (tcall (comb "match-cp") (format nil "~D" x)))))
+
+(defun hex-fmt (hex-str)
+  "Format a hex value using target's hex-prefix (default 0x)."
+  (let ((pfx (or (tgt "hex-prefix") "0x")))
+    (format nil "~A~A" pfx hex-str)))
 
 (defun ce-hex (v)
   (let ((s (string-upcase (if (integerp v) (format nil "~D" v) (symbol-name v)))))
-    (format nil "match_cp(inp, 0x~A)" s)))
+    (tcall (comb "match-cp") (hex-fmt s))))
 
 (defun ce-range (lo hi)
   (flet ((hv (x)
            (if (and (listp x) (eq (car x) 'HEX))
-               (format nil "0x~A" (string-upcase
-                                   (if (integerp (cadr x)) (format nil "~D" (cadr x))
-                                       (symbol-name (cadr x)))))
+               (hex-fmt (string-upcase
+                         (if (integerp (cadr x)) (format nil "~D" (cadr x))
+                             (symbol-name (cadr x)))))
                (if (integerp x) (format nil "~D" x)
                    (format nil "~D" (char-code (char (symbol-name x) 0)))))))
-    (format nil "match_range(inp, ~A, ~A)" (hv lo) (hv hi))))
+    (tcall (comb "match-range") (hv lo) (hv hi))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; LINE FORMATTING — structure-aware, driven from ce-seq / ce-alt
@@ -168,9 +291,13 @@
   (make-string (* 4 *indent-level*) :initial-element #\Space))
 
 (defun ml-join (wrapped)
-  "Join closure list with ,\\n+indent for multi-line emission."
+  "Join closure list with separator+newline+indent for multi-line emission.
+   For bash: space-separated. For others: comma-separated."
   (let* ((pad (indent-str))
-         (sep (concatenate 'string "," (string #\Newline) pad)))
+         (comma (cond ((and (tgt "call-style") (string= (tgt "call-style") "bash")) "")
+                      ((tgt "list-sep") (tgt "list-sep"))
+                      (t ",")))
+         (sep (concatenate 'string comma (string #\Newline) pad)))
     (concatenate 'string
                  (string #\Newline) pad
                  (format nil (concatenate 'string "~{~A~^" sep "~}") wrapped))))
@@ -199,9 +326,9 @@
 
 (defun ce-ref (name call-args env)
   (if call-args
-      (format nil "~A(inp~{, ~A~})" (peg-ident name)
-              (mapcar (lambda (a) (ca a env)) call-args))
-      (format nil "~A(inp)" (peg-ident name))))
+      (apply #'trcall (peg-ident name)
+             (mapcar (lambda (a) (ca a env)) call-args))
+      (trcall (peg-ident name))))
 
 (defun ce-switch (param cases env)
   (funcall (tgt "switch-emit") (peg-ident param)
@@ -226,7 +353,11 @@
 (defun ca (expr env)
   "Compile arg → target int or context expression."
   (cond
-    ((integerp expr) (format nil "~D" expr))
+    ((integerp expr)
+     (let ((style (tgt "call-style")))
+       (if (and style (string= style "haskell") (< expr 0))
+           (format nil "(~D)" expr)
+           (format nil "~D" expr))))
     ((and (symbolp expr) (eq expr 'EMPTY)) "0")
     ((and (symbolp expr) (member expr env))
      (funcall (tgt "param-ref") expr env))
@@ -238,11 +369,18 @@
      (funcall (tgt "ctx-literal") (string-upcase (symbol-name expr))))
     ((symbolp expr) (peg-ident expr))
     ((and (listp expr) (eq (car expr) '+))
-     (format nil "(~{~A~^ + ~})" (mapcar (lambda (e) (ca e env)) (cdr expr))))
+     (let ((parts (mapcar (lambda (e) (ca e env)) (cdr expr))))
+       (if (bash-style-p)
+           (format nil "$(( ~{~A~^ + ~} ))" parts)
+           (format nil "(~{~A~^ + ~})" parts))))
     ((and (listp expr) (eq (car expr) '-))
      (let ((ps (mapcar (lambda (e) (ca e env)) (cdr expr))))
-       (if (= 1 (length ps)) (format nil "(-~A)" (car ps))
-           (format nil "(~A~{ - ~A~})" (car ps) (cdr ps)))))
+       (if (bash-style-p)
+           (if (= 1 (length ps))
+               (format nil "$(( -~A ))" (car ps))
+               (format nil "$(( ~A~{ - ~A~} ))" (car ps) (cdr ps)))
+           (if (= 1 (length ps)) (format nil "(-~A)" (car ps))
+               (format nil "(~A~{ - ~A~})" (car ps) (cdr ps))))))
     ((and (listp expr) (eq (car expr) 'IN-FLOW))
      (funcall (tgt "in-flow-call") (ca (cadr expr) env)))
     ((and (listp expr) (eq (car expr) 'SEQ-SPACES))
@@ -259,7 +397,9 @@
     (sort rules #'< :key #'rdef-num)))
 
 (defun emit-peg (gram path)
-  (let ((*gram* gram))
+  (let ((*gram* gram)
+        (*bash-wrappers* nil)
+        (*bash-wrapper-counter* 0))
     (with-open-file (*out* path :direction :output :if-exists :supersede :external-format :utf-8)
       ;; Header
       (emit-block (tgt "header"))
@@ -275,21 +415,37 @@
             (unless (member (rdef-name rd) '(IN-FLOW SEQ-SPACES))
               (emit-block (funcall fwd-fn (peg-ident (rdef-name rd)) (rdef-params rd)))))
           (blank)))
-      ;; Rules
-      (let ((cmt (or (tgt "comment-prefix") "//")))
-        (emitf "~A ════════════════════════════════════════════════════════════════~%" cmt)
-        (emitf "~A YAML 1.2 Grammar — 211 rules~%" cmt)
-        (emitf "~A ════════════════════════════════════════════════════════════════~%" cmt)
-        (blank)
+      ;; Compile all rules first (accumulates bash wrappers)
+      (let ((cmt (or (tgt "comment-prefix") "//"))
+            (cmte (or (tgt "comment-suffix") ""))
+            (compiled-rules nil))
         (dolist (rd (grammar-rules-ordered gram))
           (unless (member (rdef-name rd) '(IN-FLOW SEQ-SPACES))
             (let* ((nm (peg-ident (rdef-name rd)))
                    (ps (rdef-params rd))
                    (sig (funcall (tgt "fn-sig") nm ps))
                    (body-str (ce (rdef-body rd) ps)))
-              (emitf "~A [~D] ~A~%" cmt (rdef-num rd) (rdef-name rd))
-              (emit-block (funcall (tgt "fn-body") sig body-str))
-              (blank)))))
+              (push (list (rdef-num rd) (rdef-name rd) sig body-str) compiled-rules))))
+        (setq compiled-rules (nreverse compiled-rules))
+        ;; Emit bash wrappers (if any)
+        (when (and (bash-style-p) *bash-wrappers*)
+          (emitf "~A ════════════════════════════════════════════════════════════════ ~A~%" cmt cmte)
+          (emitf "~A Wrapper functions (bash has no closures) ~A~%" cmt cmte)
+          (emitf "~A ════════════════════════════════════════════════════════════════ ~A~%" cmt cmte)
+          (blank)
+          (dolist (w (nreverse *bash-wrappers*))
+            (emit w))
+          (blank))
+        ;; Emit rules
+        (emitf "~A ════════════════════════════════════════════════════════════════ ~A~%" cmt cmte)
+        (emitf "~A YAML 1.2 Grammar — 211 rules ~A~%" cmt cmte)
+        (emitf "~A ════════════════════════════════════════════════════════════════ ~A~%" cmt cmte)
+        (blank)
+        (dolist (cr compiled-rules)
+          (destructuring-bind (num name sig body-str) cr
+            (emitf "~A [~D] ~A ~A~%" cmt num name cmte)
+            (emit-block (funcall (tgt "fn-body") sig body-str))
+            (blank))))
       ;; API then concerns then namespace-close then main
       (emit-block (tgt "api"))
       (blank)

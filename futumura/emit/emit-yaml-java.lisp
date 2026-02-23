@@ -223,11 +223,6 @@
       (emit-java-all))))
 
 (defun emit-java-all ()
-  (emit "// ════════════════════════════════════════════════════════════════")
-  (emit "// YamlReader.java — YAML 1.2 parser, projected from yaml-grammar.scm")
-  (emit "// ════════════════════════════════════════════════════════════════")
-  (emit "// Generated. DO NOT EDIT — regenerate from the grammar.")
-  (emit "// ════════════════════════════════════════════════════════════════")
   (blank)
   (emit "import java.io.*;")
   (emit "import java.nio.file.*;")
@@ -427,3 +422,4 @@
     (format t "; Projecting ~D rules to ~A~%" (hash-table-count (gram-rules *gram*)) output-path)
     (emit-yaml-reader-java *gram* output-path)
     (format t "; Done. ~A written.~%" output-path)))
+
