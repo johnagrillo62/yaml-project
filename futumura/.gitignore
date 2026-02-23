@@ -1,0 +1,19 @@
+# Build artifacts
+bin/
+*.class
+*.jar
+*.o
+*.cmi
+*.cmx
+*.beam
+*.exe
+
+# Editor files
+*~
+.#*
+\#*#
+
+# OS files
+.DS_Store
+Thumbs.db
+
