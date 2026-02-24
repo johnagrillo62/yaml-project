@@ -1,0 +1,8570 @@
+; ════════════════════════════════════════════════════════════════
+; yaml_reader.asm — YAML 1.2 parser (x86-64 NASM, Linux)
+; ════════════════════════════════════════════════════════════════
+
+bits 64
+default rel
+global _start
+
+section .data
+    str_block_in:    db 'BLOCK-IN', 0
+    str_block_out:   db 'BLOCK-OUT', 0
+    str_flow_in:     db 'FLOW-IN', 0
+    str_flow_out:    db 'FLOW-OUT', 0
+    str_block_key:   db 'BLOCK-KEY', 0
+    str_flow_key:    db 'FLOW-KEY', 0
+    str_strip:       db 'STRIP', 0
+    str_clip:        db 'CLIP', 0
+    str_keep:        db 'KEEP', 0
+    ok_prefix:       db 'OK: ', 0
+    fail_prefix:     db 'FAIL', 10, 0
+    chars_suffix:    db ' chars', 10, 0
+
+section .bss
+    src_ptr:     resq 1
+    src_len:     resq 1
+    pos:         resq 1
+    line_num:    resq 1
+    col_num:     resq 1
+    FAILED:      resb 1
+    RVAL_BUF:    resb 65536
+    RVAL_LEN:    resq 1
+    RTAG:        resq 1
+    RTAGINT:     resq 1
+    SAVE_SP:     resq 1
+    SAVE_STACK:  resq 49152
+    ast_tag:     resq 16384
+    ast_text:    resq 16384
+    ast_tlen:    resq 16384
+    ast_first:   resq 16384
+    ast_next:    resq 16384
+    ast_leaf:    resb 16384
+    ast_count:   resq 1
+    RAST:        resq 1
+    RAST_LIST:   resq 4096
+    RAST_LCNT:   resq 1
+    pN:          resq 1
+    pC:          resq 1
+    pM:          resq 1
+    pT:          resq 1
+    n:           resq 1
+    c:           resq 1
+    m:           resq 1
+    t:           resq 1
+    itoa_buf:    resb 32
+    read_buf:    resb 1048576
+    _star_save:  resq 1
+    _arith_tmp:  resq 1
+
+section .text
+
+; ── Input ──
+
+save_inp:
+    mov rdi, [SAVE_SP]
+    lea rsi, [SAVE_STACK]
+    mov rax, [pos]
+    mov [rsi + rdi*8], rax
+    mov rax, [line_num]
+    mov [rsi + rdi*8 + 8], rax
+    mov rax, [col_num]
+    mov [rsi + rdi*8 + 16], rax
+    add qword [SAVE_SP], 3
+    ret
+
+restore_inp:
+    sub qword [SAVE_SP], 3
+    mov rdi, [SAVE_SP]
+    lea rsi, [SAVE_STACK]
+    mov rax, [rsi + rdi*8]
+    mov [pos], rax
+    mov rax, [rsi + rdi*8 + 8]
+    mov [line_num], rax
+    mov rax, [rsi + rdi*8 + 16]
+    mov [col_num], rax
+    ret
+
+at_eof:
+    mov rax, [pos]
+    cmp rax, [src_len]
+    setge al
+    movzx eax, al
+    ret
+
+peek_cp:
+    mov rax, [pos]
+    cmp rax, [src_len]
+    jge .eof
+    mov rsi, [src_ptr]
+    movzx eax, byte [rsi + rax]
+    ret
+.eof:
+    mov eax, -1
+    ret
+
+adv_one:
+    mov rax, [pos]
+    cmp rax, [src_len]
+    jge .done
+    mov rsi, [src_ptr]
+    movzx ecx, byte [rsi + rax]
+    inc qword [pos]
+    cmp cl, 10
+    jne .not_nl
+    inc qword [line_num]
+    mov qword [col_num], 0
+    ret
+.not_nl:
+    inc qword [col_num]
+.done:
+    ret
+
+; ── Result helpers ──
+
+ok_r:
+    mov byte [FAILED], 0
+    ret
+
+fail_r:
+    mov byte [FAILED], 1
+    ret
+
+fail_no_case:
+    call fail_r
+    ret
+
+; ── Core combinators ──
+
+match_cp:
+    ; rdi = expected codepoint
+    push rdi
+    call peek_cp
+    pop rdi
+    cmp eax, edi
+    jne .mc_fail
+    lea rsi, [RVAL_BUF]
+    add rsi, [RVAL_LEN]
+    mov [rsi], al
+    inc qword [RVAL_LEN]
+    call adv_one
+    mov byte [FAILED], 0
+    ret
+.mc_fail:
+    mov byte [FAILED], 1
+    ret
+
+match_range:
+    ; rdi = lo, rsi = hi
+    push rdi
+    push rsi
+    call peek_cp
+    pop rsi
+    pop rdi
+    cmp eax, edi
+    jl .mr_fail
+    cmp eax, esi
+    jg .mr_fail
+    lea rcx, [RVAL_BUF]
+    add rcx, [RVAL_LEN]
+    mov [rcx], al
+    inc qword [RVAL_LEN]
+    call adv_one
+    mov byte [FAILED], 0
+    ret
+.mr_fail:
+    mov byte [FAILED], 1
+    ret
+
+match_str:
+    ; rdi = pointer to null-terminated target string
+    push rdi
+    mov rsi, [src_ptr]
+    add rsi, [pos]
+    mov rcx, [src_len]
+    sub rcx, [pos]
+    xor rdx, rdx
+.ms_loop:
+    movzx eax, byte [rdi + rdx]
+    test al, al
+    jz .ms_match
+    cmp rdx, rcx
+    jge .ms_fail_pop
+    movzx r8d, byte [rsi + rdx]
+    cmp al, r8b
+    jne .ms_fail_pop
+    inc rdx
+    jmp .ms_loop
+.ms_match:
+    ; matched rdx chars
+    pop rdi
+    mov rcx, rdx
+    lea rsi, [RVAL_BUF]
+    add rsi, [RVAL_LEN]
+    push rcx
+    xor r8, r8
+.ms_copy:
+    cmp r8, rcx
+    jge .ms_adv
+    movzx eax, byte [rdi + r8]
+    mov [rsi + r8], al
+    inc r8
+    jmp .ms_copy
+.ms_adv:
+    pop rcx
+    add [RVAL_LEN], rcx
+.ms_adv_loop:
+    test rcx, rcx
+    jz .ms_done
+    call adv_one
+    dec rcx
+    jmp .ms_adv_loop
+.ms_done:
+    mov byte [FAILED], 0
+    ret
+.ms_fail_pop:
+    pop rdi
+    mov byte [FAILED], 1
+    ret
+
+sol:
+    cmp qword [col_num], 0
+    jne .sol_fail
+    mov byte [FAILED], 0
+    ret
+.sol_fail:
+    mov byte [FAILED], 1
+    ret
+
+eof_ok:
+    call at_eof
+    test eax, eax
+    jz .eof_fail
+    mov byte [FAILED], 0
+    ret
+.eof_fail:
+    mov byte [FAILED], 1
+    ret
+
+str_eq:
+    ; rdi, rsi = null-terminated strings, al = 1 if equal
+.se_loop:
+    movzx eax, byte [rdi]
+    movzx ecx, byte [rsi]
+    cmp al, cl
+    jne .se_neq
+    test al, al
+    jz .se_eq
+    inc rdi
+    inc rsi
+    jmp .se_loop
+.se_eq:
+    mov al, 1
+    ret
+.se_neq:
+    xor al, al
+    ret
+
+; ── Higher-order combinators ──
+; These take function pointers (label addresses) and call them.
+
+peg_star:
+    ; rdi = function pointer (wrapper label)
+    ; Calls f repeatedly until it fails or pos doesn't advance
+    mov [_star_save], rdi
+.ps_loop:
+    mov rax, [pos]
+    push rax
+    call save_inp
+    mov rdi, [_star_save]
+    call rdi
+    pop rax
+    cmp byte [FAILED], 1
+    je .ps_done
+    cmp [pos], rax
+    jle .ps_done
+    jmp .ps_loop
+.ps_done:
+    mov byte [FAILED], 0
+    ret
+
+peg_plus:
+    ; rdi = function pointer
+    push rdi
+    call rdi
+    pop rdi
+    cmp byte [FAILED], 1
+    je .pp_fail
+    call peg_star
+    mov byte [FAILED], 0
+    ret
+.pp_fail:
+    ret
+
+peg_opt:
+    ; rdi = function pointer
+    call save_inp
+    call rdi
+    cmp byte [FAILED], 0
+    je .po_ok
+    call restore_inp
+    mov byte [FAILED], 0
+.po_ok:
+    ret
+
+peg_neg:
+    ; rdi = function pointer
+    call save_inp
+    call rdi
+    cmp byte [FAILED], 1
+    je .pn_yes
+    call restore_inp
+    mov byte [FAILED], 1
+    ret
+.pn_yes:
+    call restore_inp
+    mov byte [FAILED], 0
+    ret
+
+peg_rep:
+    ; rdi = count, rsi = function pointer
+    push rsi
+    push rdi
+    mov rcx, rdi
+.pr_loop:
+    test rcx, rcx
+    jz .pr_done
+    push rcx
+    mov rdi, [rsp + 8]   ; function pointer
+    call rdi
+    pop rcx
+    cmp byte [FAILED], 1
+    je .pr_fail
+    dec rcx
+    jmp .pr_loop
+.pr_done:
+    pop rdi
+    pop rsi
+    mov byte [FAILED], 0
+    ret
+.pr_fail:
+    pop rdi
+    pop rsi
+    ret
+
+peg_ahead:
+    ; rdi = function pointer
+    call save_inp
+    call rdi
+    cmp byte [FAILED], 1
+    je .pa_fail
+    call restore_inp
+    mov byte [FAILED], 0
+    ret
+.pa_fail:
+    call restore_inp
+    ret
+
+peg_behind:
+    ; rdi = function pointer
+    mov rax, [pos]
+    test rax, rax
+    jz .pb_fail
+    push rdi
+    dec qword [pos]
+    ; Approximate: don't fix line/col for lookbehind
+    call save_inp
+    pop rdi
+    call rdi
+    cmp byte [FAILED], 1
+    je .pb_fail2
+    call restore_inp
+    inc qword [pos]
+    mov byte [FAILED], 0
+    ret
+.pb_fail2:
+    call restore_inp
+    inc qword [pos]
+.pb_fail:
+    mov byte [FAILED], 1
+    ret
+
+peg_minus:
+    ; rdi = function pointer a, rsi = function pointer b
+    push rsi
+    push rdi
+    call save_inp
+    call rdi
+    cmp byte [FAILED], 1
+    je .pm_fail
+    mov rax, [pos]
+    push rax
+    call restore_inp
+    call save_inp
+    mov rdi, [rsp + 8]   ; fn b
+    call rdi
+    pop rax              ; pos from a
+    cmp byte [FAILED], 1
+    je .pm_a_wins
+    ; b also matched — check if same length
+    cmp [pos], rax
+    je .pm_excl
+.pm_a_wins:
+    ; restore and run a again
+    call restore_inp
+    pop rdi
+    pop rsi
+    call rdi
+    ret
+.pm_excl:
+    call restore_inp
+    pop rdi
+    pop rsi
+    mov byte [FAILED], 1
+    ret
+.pm_fail:
+    call restore_inp
+    pop rdi
+    pop rsi
+    ret
+
+; ── Context ──
+
+in_flow:
+    mov rdi, [pC]
+    lea rsi, [str_flow_out]
+    call str_eq
+    test al, al
+    jnz .if_fi
+    mov rdi, [pC]
+    lea rsi, [str_flow_in]
+    call str_eq
+    test al, al
+    jnz .if_fi
+    lea rax, [str_flow_key]
+    mov [RTAG], rax
+    ret
+.if_fi:
+    lea rax, [str_flow_in]
+    mov [RTAG], rax
+    ret
+
+seq_spaces:
+    mov rdi, [pC]
+    lea rsi, [str_block_out]
+    call str_eq
+    test al, al
+    jz .ss_no
+    mov rax, [pN]
+    dec rax
+    mov [RTAGINT], rax
+    ret
+.ss_no:
+    mov rax, [pN]
+    mov [RTAGINT], rax
+    ret
+
+; ── YAML extensions ──
+
+peg_build:
+    ; rdi = tag string ptr, rsi = function pointer (body wrapper)
+    push rdi
+    push rsi
+    call rsi
+    cmp byte [FAILED], 1
+    je .b_fail
+    mov rax, [ast_count]
+    pop rsi
+    pop rdi
+    mov [ast_tag + rax*8], rdi
+    mov byte [ast_leaf + rax], 0
+    mov qword [ast_first + rax*8], -1
+    inc qword [ast_count]
+    mov [RAST], rax
+    mov byte [FAILED], 0
+    ret
+.b_fail:
+    pop rsi
+    pop rdi
+    ret
+
+peg_scalar:
+    ; rdi = function pointer (body wrapper)
+    push rdi
+    call rdi
+    pop rdi
+    cmp byte [FAILED], 1
+    je .sc_fail
+    mov rax, [ast_count]
+    lea rsi, [RVAL_BUF]
+    mov [ast_text + rax*8], rsi
+    mov rcx, [RVAL_LEN]
+    mov [ast_tlen + rax*8], rcx
+    mov byte [ast_leaf + rax], 1
+    inc qword [ast_count]
+    mov [RAST], rax
+    mov byte [FAILED], 0
+    ret
+.sc_fail:
+    ret
+
+peg_collect:
+    ; rdi = function pointer — passthrough
+    jmp rdi
+
+peg_detect_indent:
+    ; rdi = n
+    push rdi
+    mov rax, [pos]
+    mov rsi, [src_ptr]
+    mov rcx, [src_len]
+    xor edx, edx
+.di_sp:
+    lea r8, [rax + rdx]
+    cmp r8, rcx
+    jge .di_def
+    cmp byte [rsi + r8], 32
+    jne .di_chk
+    inc edx
+    jmp .di_sp
+.di_chk:
+    cmp byte [rsi + r8], 10
+    je .di_next
+    pop rdi
+    sub edx, edi
+    cmp edx, 1
+    jge .di_set
+    mov edx, 1
+.di_set:
+    mov [RTAGINT], rdx
+    mov byte [FAILED], 0
+    ret
+.di_next:
+    lea r8, [rax + rdx]
+.di_skip:
+    cmp r8, rcx
+    jge .di_def
+    cmp byte [rsi + r8], 10
+    je .di_nl
+    inc r8
+    jmp .di_skip
+.di_nl:
+    inc r8
+    mov rax, r8
+    xor edx, edx
+    jmp .di_sp
+.di_def:
+    pop rdi
+    mov qword [RTAGINT], 1
+    mov byte [FAILED], 0
+    ret
+
+peg_parse_int:
+    ; rdi = function pointer
+    push rdi
+    call rdi
+    pop rdi
+    cmp byte [FAILED], 1
+    je .pi_fail
+    xor eax, eax
+    lea rsi, [RVAL_BUF]
+    mov rcx, [RVAL_LEN]
+    xor edx, edx
+.pi_loop:
+    cmp rdx, rcx
+    jge .pi_done
+    movzx r8d, byte [rsi + rdx]
+    sub r8d, 48
+    imul eax, 10
+    add eax, r8d
+    inc edx
+    jmp .pi_loop
+.pi_done:
+    mov [RTAGINT], rax
+    ret
+.pi_fail:
+    ret
+
+peg_parse_sym:
+    ; rdi = function pointer, rsi = symbol string ptr
+    push rsi
+    push rdi
+    call rdi
+    pop rdi
+    pop rsi
+    cmp byte [FAILED], 1
+    je .ps_fail
+    mov [RTAG], rsi
+    ret
+.ps_fail:
+    ret
+
+peg_val:
+    ; rdi = value string ptr
+    mov byte [FAILED], 0
+    mov [RTAG], rdi
+    ret
+
+; ── I/O and Entry ──
+
+print_str:
+    push rdi
+    xor ecx, ecx
+.ps_len:
+    cmp byte [rdi + rcx], 0
+    je .ps_out
+    inc ecx
+    jmp .ps_len
+.ps_out:
+    mov rax, 1
+    pop rsi
+    mov edx, ecx
+    mov rdi, 1
+    syscall
+    ret
+
+print_int:
+    lea rsi, [itoa_buf + 30]
+    mov byte [rsi], 0
+    mov rax, rdi
+    test rax, rax
+    jnz .pi_conv
+    dec rsi
+    mov byte [rsi], 48
+    jmp .pi_pr
+.pi_conv:
+    mov rcx, 10
+.pi_div:
+    test rax, rax
+    jz .pi_pr
+    xor edx, edx
+    div rcx
+    add dl, 48
+    dec rsi
+    mov [rsi], dl
+    jmp .pi_div
+.pi_pr:
+    mov rdi, rsi
+    call print_str
+    ret
+
+_start:
+    mov rax, 0
+    mov rdi, 0
+    lea rsi, [read_buf]
+    mov rdx, 1048576
+    syscall
+    cmp rax, 0
+    jle .exit_fail
+
+    lea rcx, [read_buf]
+    mov [src_ptr], rcx
+    mov [src_len], rax
+    mov qword [pos], 0
+    mov qword [line_num], 1
+    mov qword [col_num], 0
+    mov byte [FAILED], 0
+    mov qword [ast_count], 0
+    mov qword [SAVE_SP], 0
+    mov qword [RVAL_LEN], 0
+
+    call l_yaml_stream
+
+    cmp byte [FAILED], 1
+    je .exit_fail
+
+    lea rdi, [ok_prefix]
+    call print_str
+    mov rdi, [pos]
+    call print_int
+    lea rdi, [chars_suffix]
+    call print_str
+
+    mov rax, 60
+    xor rdi, rdi
+    syscall
+
+.exit_fail:
+    lea rdi, [fail_prefix]
+    call print_str
+    mov rax, 60
+    mov rdi, 1
+    syscall
+
+
+
+section .data
+; ── String literals ──
+    _str1: db 89, 65, 77, 76, 0
+    _str2: db 84, 65, 71, 0
+    _str3: db 33, 33, 0
+    _str4: db 33, 60, 0
+    _str5: db 65, 78, 67, 72, 79, 82, 0
+    _str6: db 65, 76, 73, 65, 83, 0
+    _str7: db 39, 39, 0
+    _str8: db 83, 69, 81, 85, 69, 78, 67, 69, 0
+    _str9: db 77, 65, 80, 80, 73, 78, 71, 0
+    _str10: db 80, 65, 73, 82, 0
+    _str11: db 83, 84, 82, 73, 80, 0
+    _str12: db 75, 69, 69, 80, 0
+    _str13: db 67, 76, 73, 80, 0
+    _str14: db 45, 45, 45, 0
+    _str15: db 46, 46, 46, 0
+    _str16: db 68, 79, 67, 0
+    _str17: db 83, 84, 82, 69, 65, 77, 0
+
+section .text
+; ════════════════════════════════════════════════════════════════ 
+; Wrapper functions (bash has no closures) 
+; ════════════════════════════════════════════════════════════════ 
+
+_w1:
+    mov rdi, 0x9
+    call match_cp
+    ret
+_w2:
+    mov rdi, 0x0A
+    call match_cp
+    ret
+_w3:
+    mov rdi, 0x0D
+    call match_cp
+    ret
+_w4:
+    mov rdi, 0x20
+    mov rsi, 0x7E
+    call match_range
+    ret
+_w5:
+    mov rdi, 0x85
+    call match_cp
+    ret
+_w6:
+    mov rdi, 0xA0
+    mov rsi, 0xD7FF
+    call match_range
+    ret
+_w7:
+    mov rdi, 0xE000
+    mov rsi, 0xFFFD
+    call match_range
+    ret
+_w8:
+    mov rdi, 0x10000
+    mov rsi, 0x10FFFF
+    call match_range
+    ret
+_w10:
+    mov rdi, 0x9
+    call match_cp
+    ret
+_w11:
+    mov rdi, 0x20
+    mov rsi, 0x10FFFF
+    call match_range
+    ret
+_w13:
+    mov rdi, 64
+    call match_cp
+    ret
+_w14:
+    mov rdi, 96
+    call match_cp
+    ret
+_w16:
+    call c_sequence_entry
+    ret
+_w17:
+    call c_mapping_key
+    ret
+_w18:
+    call c_mapping_value
+    ret
+_w19:
+    call c_collect_entry
+    ret
+_w20:
+    call c_sequence_start
+    ret
+_w21:
+    call c_sequence_end
+    ret
+_w22:
+    call c_mapping_start
+    ret
+_w23:
+    call c_mapping_end
+    ret
+_w24:
+    call c_comment
+    ret
+_w25:
+    call c_anchor
+    ret
+_w26:
+    call c_alias
+    ret
+_w27:
+    call c_tag
+    ret
+_w28:
+    call c_literal
+    ret
+_w29:
+    call c_folded
+    ret
+_w30:
+    call c_single_quote
+    ret
+_w31:
+    call c_double_quote
+    ret
+_w32:
+    call c_directive
+    ret
+_w33:
+    call c_reserved
+    ret
+_w35:
+    call c_collect_entry
+    ret
+_w36:
+    call c_sequence_start
+    ret
+_w37:
+    call c_sequence_end
+    ret
+_w38:
+    call c_mapping_start
+    ret
+_w39:
+    call c_mapping_end
+    ret
+_w41:
+    call b_line_feed
+    ret
+_w42:
+    call b_carriage_return
+    ret
+_w44:
+    call c_printable
+    ret
+_w45:
+    call b_char
+    ret
+_w46:
+    call c_byte_order_mark
+    ret
+_w48:
+        call save_inp
+    call _w45
+    cmp byte [FAILED], 0
+    je .alt_ok_47
+    call restore_inp
+    call save_inp
+    call _w46
+    cmp byte [FAILED], 0
+    je .alt_ok_47
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_47:
+    ret
+_w49:
+    call b_carriage_return
+    ret
+_w50:
+    call b_line_feed
+    ret
+_w52:
+    call save_inp
+    call _w49
+    cmp byte [FAILED], 1
+    je .seq_fail_51
+    call _w50
+    cmp byte [FAILED], 1
+    je .seq_fail_51
+    jmp .seq_ok_51
+.seq_fail_51:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_51:
+    ret
+_w53:
+    call b_carriage_return
+    ret
+_w54:
+    call b_line_feed
+    ret
+_w56:
+    call s_space
+    ret
+_w57:
+    call s_tab
+    ret
+_w59:
+    call nb_char
+    ret
+_w60:
+    call s_white
+    ret
+_w61:
+    call ns_dec_digit
+    ret
+_w62:
+    mov rdi, 0x41
+    mov rsi, 0x46
+    call match_range
+    ret
+_w63:
+    mov rdi, 0x61
+    mov rsi, 0x66
+    call match_range
+    ret
+_w65:
+    mov rdi, 0x41
+    mov rsi, 0x5A
+    call match_range
+    ret
+_w66:
+    mov rdi, 0x61
+    mov rsi, 0x7A
+    call match_range
+    ret
+_w68:
+    call ns_dec_digit
+    ret
+_w69:
+    call ns_ascii_letter
+    ret
+_w70:
+    mov rdi, 45
+    call match_cp
+    ret
+_w72:
+    mov rdi, 37
+    call match_cp
+    ret
+_w73:
+    call ns_hex_digit
+    ret
+_w74:
+    call ns_hex_digit
+    ret
+_w76:
+    call save_inp
+    call _w72
+    cmp byte [FAILED], 1
+    je .seq_fail_75
+    call _w73
+    cmp byte [FAILED], 1
+    je .seq_fail_75
+    call _w74
+    cmp byte [FAILED], 1
+    je .seq_fail_75
+    jmp .seq_ok_75
+.seq_fail_75:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_75:
+    ret
+_w77:
+    call ns_word_char
+    ret
+_w78:
+    mov rdi, 35
+    call match_cp
+    ret
+_w79:
+    mov rdi, 59
+    call match_cp
+    ret
+_w80:
+    mov rdi, 47
+    call match_cp
+    ret
+_w81:
+    mov rdi, 63
+    call match_cp
+    ret
+_w82:
+    mov rdi, 58
+    call match_cp
+    ret
+_w83:
+    mov rdi, 64
+    call match_cp
+    ret
+_w84:
+    mov rdi, 38
+    call match_cp
+    ret
+_w85:
+    mov rdi, 61
+    call match_cp
+    ret
+_w86:
+    mov rdi, 43
+    call match_cp
+    ret
+_w87:
+    mov rdi, 36
+    call match_cp
+    ret
+_w88:
+    mov rdi, 44
+    call match_cp
+    ret
+_w89:
+    mov rdi, 95
+    call match_cp
+    ret
+_w90:
+    mov rdi, 46
+    call match_cp
+    ret
+_w91:
+    mov rdi, 33
+    call match_cp
+    ret
+_w92:
+    mov rdi, 126
+    call match_cp
+    ret
+_w93:
+    mov rdi, 42
+    call match_cp
+    ret
+_w94:
+    mov rdi, 39
+    call match_cp
+    ret
+_w95:
+    mov rdi, 40
+    call match_cp
+    ret
+_w96:
+    mov rdi, 41
+    call match_cp
+    ret
+_w97:
+    mov rdi, 91
+    call match_cp
+    ret
+_w98:
+    mov rdi, 93
+    call match_cp
+    ret
+_w100:
+    call ns_uri_char
+    ret
+_w101:
+    call c_tag
+    ret
+_w102:
+    call c_flow_indicator
+    ret
+_w104:
+        call save_inp
+    call _w101
+    cmp byte [FAILED], 0
+    je .alt_ok_103
+    call restore_inp
+    call save_inp
+    call _w102
+    cmp byte [FAILED], 0
+    je .alt_ok_103
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_103:
+    ret
+_w105:
+    mov rdi, 120
+    call match_cp
+    ret
+_w106:
+    call ns_hex_digit
+    ret
+_w107:
+    mov rdi, 2
+    mov rsi, _w106
+    call peg_rep
+    ret
+_w109:
+    mov rdi, 117
+    call match_cp
+    ret
+_w110:
+    call ns_hex_digit
+    ret
+_w111:
+    mov rdi, 4
+    mov rsi, _w110
+    call peg_rep
+    ret
+_w113:
+    mov rdi, 85
+    call match_cp
+    ret
+_w114:
+    call ns_hex_digit
+    ret
+_w115:
+    mov rdi, 8
+    mov rsi, _w114
+    call peg_rep
+    ret
+_w117:
+    call c_escape
+    ret
+_w118:
+    call ns_esc_null
+    ret
+_w119:
+    call ns_esc_bell
+    ret
+_w120:
+    call ns_esc_backspace
+    ret
+_w121:
+    call ns_esc_horizontal_tab
+    ret
+_w122:
+    call ns_esc_line_feed
+    ret
+_w123:
+    call ns_esc_vertical_tab
+    ret
+_w124:
+    call ns_esc_form_feed
+    ret
+_w125:
+    call ns_esc_carriage_return
+    ret
+_w126:
+    call ns_esc_escape
+    ret
+_w127:
+    call ns_esc_space
+    ret
+_w128:
+    call ns_esc_double_quote
+    ret
+_w129:
+    call ns_esc_slash
+    ret
+_w130:
+    call ns_esc_backslash
+    ret
+_w131:
+    call ns_esc_next_line
+    ret
+_w132:
+    call ns_esc_non_breaking_space
+    ret
+_w133:
+    call ns_esc_line_separator
+    ret
+_w134:
+    call ns_esc_paragraph_separator
+    ret
+_w135:
+    call ns_esc_8_bit
+    ret
+_w136:
+    call ns_esc_16_bit
+    ret
+_w137:
+    call ns_esc_32_bit
+    ret
+_w139:
+        call save_inp
+    call _w118
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w119
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w120
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w121
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w122
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w123
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w124
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w125
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w126
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w127
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w128
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w129
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w130
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w131
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w132
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w133
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w134
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w135
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w136
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    call save_inp
+    call _w137
+    cmp byte [FAILED], 0
+    je .alt_ok_138
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_138:
+    ret
+_w141:
+    call s_space
+    ret
+_w142:
+    call s_space
+    ret
+_w143:
+    call s_space
+    ret
+_w144:
+    call s_white
+    ret
+_w145:
+    mov rdi, _w144
+    call peg_plus
+    ret
+_w146:
+    call ok_r
+    ret
+_w149:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent
+    ret
+_w150:
+    call s_separate_in_line
+    ret
+_w151:
+    mov rdi, _w150
+    call peg_opt
+    ret
+_w153:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_line_prefix
+    ret
+_w154:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent_lt
+    ret
+_w156:
+        call save_inp
+    call _w153
+    cmp byte [FAILED], 0
+    je .alt_ok_155
+    call restore_inp
+    call save_inp
+    call _w154
+    cmp byte [FAILED], 0
+    je .alt_ok_155
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_155:
+    ret
+_w157:
+    call b_as_line_feed
+    ret
+_w159:
+    call b_non_content
+    ret
+_w160:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call l_empty
+    ret
+_w161:
+    mov rdi, _w160
+    call peg_plus
+    ret
+_w163:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call b_l_trimmed
+    ret
+_w164:
+    call b_as_space
+    ret
+_w166:
+    call s_separate_in_line
+    ret
+_w167:
+    mov rdi, _w166
+    call peg_opt
+    ret
+_w168:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_flow_in
+    mov [c], rax
+    call b_l_folded
+    ret
+_w169:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_flow_line_prefix
+    ret
+_w171:
+    call c_comment
+    ret
+_w172:
+    call nb_char
+    ret
+_w173:
+    mov rdi, _w172
+    call peg_star
+    ret
+_w175:
+    call b_non_content
+    ret
+_w176:
+    call ok_r
+    ret
+_w178:
+    call s_separate_in_line
+    ret
+_w179:
+    call c_nb_comment_text
+    ret
+_w180:
+    mov rdi, _w179
+    call peg_opt
+    ret
+_w182:
+    call save_inp
+    call _w178
+    cmp byte [FAILED], 1
+    je .seq_fail_181
+    call _w180
+    cmp byte [FAILED], 1
+    je .seq_fail_181
+    jmp .seq_ok_181
+.seq_fail_181:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_181:
+    ret
+_w183:
+    mov rdi, _w182
+    call peg_opt
+    ret
+_w184:
+    call b_comment
+    ret
+_w186:
+    call s_separate_in_line
+    ret
+_w187:
+    call c_nb_comment_text
+    ret
+_w188:
+    mov rdi, _w187
+    call peg_opt
+    ret
+_w189:
+    call b_non_content
+    ret
+_w191:
+    call s_b_comment
+    ret
+_w192:
+    call ok_r
+    ret
+_w194:
+        call save_inp
+    call _w191
+    cmp byte [FAILED], 0
+    je .alt_ok_193
+    call restore_inp
+    call save_inp
+    call _w192
+    cmp byte [FAILED], 0
+    je .alt_ok_193
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_193:
+    ret
+_w195:
+    call l_comment
+    ret
+_w196:
+    mov rdi, _w195
+    call peg_star
+    ret
+_w199:
+    call s_l_comments
+    ret
+_w200:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_flow_line_prefix
+    ret
+_w202:
+    call save_inp
+    call _w199
+    cmp byte [FAILED], 1
+    je .seq_fail_201
+    call _w200
+    cmp byte [FAILED], 1
+    je .seq_fail_201
+    jmp .seq_ok_201
+.seq_fail_201:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_201:
+    ret
+_w203:
+    call s_separate_in_line
+    ret
+_w205:
+    call c_directive
+    ret
+_w206:
+    call ns_yaml_directive
+    ret
+_w207:
+    call ns_tag_directive
+    ret
+_w208:
+    call ns_reserved_directive
+    ret
+_w210:
+        call save_inp
+    call _w206
+    cmp byte [FAILED], 0
+    je .alt_ok_209
+    call restore_inp
+    call save_inp
+    call _w207
+    cmp byte [FAILED], 0
+    je .alt_ok_209
+    call restore_inp
+    call save_inp
+    call _w208
+    cmp byte [FAILED], 0
+    je .alt_ok_209
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_209:
+    ret
+_w211:
+    call s_l_comments
+    ret
+_w213:
+    call ns_directive_name
+    ret
+_w214:
+    call s_separate_in_line
+    ret
+_w215:
+    call ns_directive_parameter
+    ret
+_w217:
+    call save_inp
+    call _w214
+    cmp byte [FAILED], 1
+    je .seq_fail_216
+    call _w215
+    cmp byte [FAILED], 1
+    je .seq_fail_216
+    jmp .seq_ok_216
+.seq_fail_216:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_216:
+    ret
+_w218:
+    mov rdi, _w217
+    call peg_star
+    ret
+_w220:
+    call ns_char
+    ret
+_w221:
+    call ns_char
+    ret
+_w222:
+    mov rdi, _str1
+    call match_str
+    ret
+_w223:
+    call s_separate_in_line
+    ret
+_w224:
+    call ns_yaml_version
+    ret
+_w226:
+    call ns_dec_digit
+    ret
+_w227:
+    mov rdi, _w226
+    call peg_plus
+    ret
+_w228:
+    mov rdi, 46
+    call match_cp
+    ret
+_w229:
+    call ns_dec_digit
+    ret
+_w230:
+    mov rdi, _w229
+    call peg_plus
+    ret
+_w232:
+    mov rdi, _str2
+    call match_str
+    ret
+_w233:
+    call s_separate_in_line
+    ret
+_w234:
+    call c_tag_handle
+    ret
+_w235:
+    call s_separate_in_line
+    ret
+_w236:
+    call ns_tag_prefix
+    ret
+_w238:
+    call c_named_tag_handle
+    ret
+_w239:
+    call c_secondary_tag_handle
+    ret
+_w240:
+    call c_primary_tag_handle
+    ret
+_w242:
+    mov rdi, 33
+    call match_cp
+    ret
+_w243:
+    call ns_word_char
+    ret
+_w244:
+    mov rdi, _w243
+    call peg_plus
+    ret
+_w245:
+    mov rdi, 33
+    call match_cp
+    ret
+_w247:
+    call c_ns_local_tag_prefix
+    ret
+_w248:
+    call ns_global_tag_prefix
+    ret
+_w250:
+    mov rdi, 33
+    call match_cp
+    ret
+_w251:
+    call ns_uri_char
+    ret
+_w252:
+    mov rdi, _w251
+    call peg_star
+    ret
+_w254:
+    call ns_tag_char
+    ret
+_w255:
+    call ns_uri_char
+    ret
+_w256:
+    mov rdi, _w255
+    call peg_star
+    ret
+_w258:
+    call c_ns_tag_property
+    ret
+_w259:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w260:
+    call c_ns_anchor_property
+    ret
+_w262:
+    call save_inp
+    call _w259
+    cmp byte [FAILED], 1
+    je .seq_fail_261
+    call _w260
+    cmp byte [FAILED], 1
+    je .seq_fail_261
+    jmp .seq_ok_261
+.seq_fail_261:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_261:
+    ret
+_w263:
+    mov rdi, _w262
+    call peg_opt
+    ret
+_w265:
+    call save_inp
+    call _w258
+    cmp byte [FAILED], 1
+    je .seq_fail_264
+    call _w263
+    cmp byte [FAILED], 1
+    je .seq_fail_264
+    jmp .seq_ok_264
+.seq_fail_264:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_264:
+    ret
+_w266:
+    call c_ns_anchor_property
+    ret
+_w267:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w268:
+    call c_ns_tag_property
+    ret
+_w270:
+    call save_inp
+    call _w267
+    cmp byte [FAILED], 1
+    je .seq_fail_269
+    call _w268
+    cmp byte [FAILED], 1
+    je .seq_fail_269
+    jmp .seq_ok_269
+.seq_fail_269:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_269:
+    ret
+_w271:
+    mov rdi, _w270
+    call peg_opt
+    ret
+_w273:
+    call save_inp
+    call _w266
+    cmp byte [FAILED], 1
+    je .seq_fail_272
+    call _w271
+    cmp byte [FAILED], 1
+    je .seq_fail_272
+    jmp .seq_ok_272
+.seq_fail_272:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_272:
+    ret
+_w275:
+    call c_verbatim_tag
+    ret
+_w276:
+    call c_ns_shorthand_tag
+    ret
+_w277:
+    call c_non_specific_tag
+    ret
+_w279:
+    mov rdi, _str4
+    call match_str
+    ret
+_w280:
+    call ns_uri_char
+    ret
+_w281:
+    mov rdi, _w280
+    call peg_plus
+    ret
+_w282:
+    mov rdi, 62
+    call match_cp
+    ret
+_w284:
+    call c_tag_handle
+    ret
+_w285:
+    call ns_tag_char
+    ret
+_w286:
+    mov rdi, _w285
+    call peg_plus
+    ret
+_w288:
+    call c_anchor
+    ret
+_w289:
+    call ns_anchor_name
+    ret
+_w290:
+    mov rdi, _w289
+    call peg_scalar
+    ret
+_w292:
+    call save_inp
+    call _w288
+    cmp byte [FAILED], 1
+    je .seq_fail_291
+    call _w290
+    cmp byte [FAILED], 1
+    je .seq_fail_291
+    jmp .seq_ok_291
+.seq_fail_291:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_291:
+    ret
+_w293:
+    call ns_char
+    ret
+_w294:
+    call c_flow_indicator
+    ret
+_w295:
+    call ns_anchor_char
+    ret
+_w296:
+    call c_alias
+    ret
+_w297:
+    call ns_anchor_name
+    ret
+_w298:
+    mov rdi, _w297
+    call peg_scalar
+    ret
+_w300:
+    call save_inp
+    call _w296
+    cmp byte [FAILED], 1
+    je .seq_fail_299
+    call _w298
+    cmp byte [FAILED], 1
+    je .seq_fail_299
+    jmp .seq_ok_299
+.seq_fail_299:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_299:
+    ret
+_w301:
+    call c_ns_esc_char
+    ret
+_w302:
+    call nb_json
+    ret
+_w303:
+    mov rdi, 92
+    call match_cp
+    ret
+_w304:
+    mov rdi, 34
+    call match_cp
+    ret
+_w306:
+        call save_inp
+    call _w303
+    cmp byte [FAILED], 0
+    je .alt_ok_305
+    call restore_inp
+    call save_inp
+    call _w304
+    cmp byte [FAILED], 0
+    je .alt_ok_305
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_305:
+    ret
+_w307:
+    mov rdi, _w302
+    mov rsi, _w306
+    call peg_minus
+    ret
+_w309:
+    call nb_double_char
+    ret
+_w310:
+    call s_white
+    ret
+_w311:
+    mov rdi, 34
+    call match_cp
+    ret
+_w312:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call nb_double_text
+    ret
+_w313:
+    mov rdi, 34
+    call match_cp
+    ret
+_w315:
+    call save_inp
+    call _w311
+    cmp byte [FAILED], 1
+    je .seq_fail_314
+    call _w312
+    cmp byte [FAILED], 1
+    je .seq_fail_314
+    call _w313
+    cmp byte [FAILED], 1
+    je .seq_fail_314
+    jmp .seq_ok_314
+.seq_fail_314:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_314:
+    ret
+_w317:
+    call nb_double_char
+    ret
+_w318:
+    call s_white
+    ret
+_w319:
+    mov rdi, _w318
+    call peg_star
+    ret
+_w320:
+    mov rdi, 92
+    call match_cp
+    ret
+_w321:
+    call b_non_content
+    ret
+_w322:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_flow_in
+    mov [c], rax
+    call l_empty
+    ret
+_w323:
+    mov rdi, _w322
+    call peg_star
+    ret
+_w324:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_flow_line_prefix
+    ret
+_w326:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_double_escaped
+    ret
+_w327:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_flow_folded
+    ret
+_w329:
+    call s_white
+    ret
+_w330:
+    mov rdi, _w329
+    call peg_star
+    ret
+_w331:
+    call ns_double_char
+    ret
+_w333:
+    call save_inp
+    call _w330
+    cmp byte [FAILED], 1
+    je .seq_fail_332
+    call _w331
+    cmp byte [FAILED], 1
+    je .seq_fail_332
+    jmp .seq_ok_332
+.seq_fail_332:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_332:
+    ret
+_w334:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_double_break
+    ret
+_w335:
+    call ns_double_char
+    ret
+_w336:
+    call nb_ns_double_in_line
+    ret
+_w337:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_double_next_line
+    ret
+_w338:
+    call s_white
+    ret
+_w339:
+    mov rdi, _w338
+    call peg_star
+    ret
+_w341:
+        call save_inp
+    call _w337
+    cmp byte [FAILED], 0
+    je .alt_ok_340
+    call restore_inp
+    call save_inp
+    call _w339
+    cmp byte [FAILED], 0
+    je .alt_ok_340
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_340:
+    ret
+_w343:
+    call save_inp
+    call _w335
+    cmp byte [FAILED], 1
+    je .seq_fail_342
+    call _w336
+    cmp byte [FAILED], 1
+    je .seq_fail_342
+    call _w341
+    cmp byte [FAILED], 1
+    je .seq_fail_342
+    jmp .seq_ok_342
+.seq_fail_342:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_342:
+    ret
+_w344:
+    mov rdi, _w343
+    call peg_opt
+    ret
+_w346:
+    call nb_ns_double_in_line
+    ret
+_w347:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_double_next_line
+    ret
+_w348:
+    call s_white
+    ret
+_w349:
+    mov rdi, _w348
+    call peg_star
+    ret
+_w351:
+        call save_inp
+    call _w347
+    cmp byte [FAILED], 0
+    je .alt_ok_350
+    call restore_inp
+    call save_inp
+    call _w349
+    cmp byte [FAILED], 0
+    je .alt_ok_350
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_350:
+    ret
+_w353:
+    call c_quoted_quote
+    ret
+_w354:
+    call nb_json
+    ret
+_w355:
+    mov rdi, 39
+    call match_cp
+    ret
+_w356:
+    mov rdi, _w354
+    mov rsi, _w355
+    call peg_minus
+    ret
+_w358:
+    call nb_single_char
+    ret
+_w359:
+    call s_white
+    ret
+_w360:
+    mov rdi, 39
+    call match_cp
+    ret
+_w361:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call nb_single_text
+    ret
+_w362:
+    mov rdi, 39
+    call match_cp
+    ret
+_w364:
+    call save_inp
+    call _w360
+    cmp byte [FAILED], 1
+    je .seq_fail_363
+    call _w361
+    cmp byte [FAILED], 1
+    je .seq_fail_363
+    call _w362
+    cmp byte [FAILED], 1
+    je .seq_fail_363
+    jmp .seq_ok_363
+.seq_fail_363:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_363:
+    ret
+_w366:
+    call nb_single_char
+    ret
+_w367:
+    call s_white
+    ret
+_w368:
+    mov rdi, _w367
+    call peg_star
+    ret
+_w369:
+    call ns_single_char
+    ret
+_w371:
+    call save_inp
+    call _w368
+    cmp byte [FAILED], 1
+    je .seq_fail_370
+    call _w369
+    cmp byte [FAILED], 1
+    je .seq_fail_370
+    jmp .seq_ok_370
+.seq_fail_370:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_370:
+    ret
+_w372:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_flow_folded
+    ret
+_w373:
+    call ns_single_char
+    ret
+_w374:
+    call ns_single_in_line
+    ret
+_w375:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_single_next_line
+    ret
+_w376:
+    call s_white
+    ret
+_w377:
+    mov rdi, _w376
+    call peg_star
+    ret
+_w379:
+        call save_inp
+    call _w375
+    cmp byte [FAILED], 0
+    je .alt_ok_378
+    call restore_inp
+    call save_inp
+    call _w377
+    cmp byte [FAILED], 0
+    je .alt_ok_378
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_378:
+    ret
+_w381:
+    call save_inp
+    call _w373
+    cmp byte [FAILED], 1
+    je .seq_fail_380
+    call _w374
+    cmp byte [FAILED], 1
+    je .seq_fail_380
+    call _w379
+    cmp byte [FAILED], 1
+    je .seq_fail_380
+    jmp .seq_ok_380
+.seq_fail_380:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_380:
+    ret
+_w382:
+    mov rdi, _w381
+    call peg_opt
+    ret
+_w384:
+    call ns_single_in_line
+    ret
+_w385:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_single_next_line
+    ret
+_w386:
+    call s_white
+    ret
+_w387:
+    mov rdi, _w386
+    call peg_star
+    ret
+_w389:
+        call save_inp
+    call _w385
+    cmp byte [FAILED], 0
+    je .alt_ok_388
+    call restore_inp
+    call save_inp
+    call _w387
+    cmp byte [FAILED], 0
+    je .alt_ok_388
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_388:
+    ret
+_w391:
+    call ns_char
+    ret
+_w392:
+    call c_indicator
+    ret
+_w393:
+    mov rdi, _w391
+    mov rsi, _w392
+    call peg_minus
+    ret
+_w394:
+    mov rdi, 63
+    call match_cp
+    ret
+_w395:
+    mov rdi, 58
+    call match_cp
+    ret
+_w396:
+    mov rdi, 45
+    call match_cp
+    ret
+_w398:
+        call save_inp
+    call _w394
+    cmp byte [FAILED], 0
+    je .alt_ok_397
+    call restore_inp
+    call save_inp
+    call _w395
+    cmp byte [FAILED], 0
+    je .alt_ok_397
+    call restore_inp
+    call save_inp
+    call _w396
+    cmp byte [FAILED], 0
+    je .alt_ok_397
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_397:
+    ret
+_w399:
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_safe
+    ret
+_w400:
+    mov rdi, _w399
+    call peg_ahead
+    ret
+_w402:
+    call save_inp
+    call _w398
+    cmp byte [FAILED], 1
+    je .seq_fail_401
+    call _w400
+    cmp byte [FAILED], 1
+    je .seq_fail_401
+    jmp .seq_ok_401
+.seq_fail_401:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_401:
+    ret
+_w405:
+    call ns_char
+    ret
+_w406:
+    call c_flow_indicator
+    ret
+_w407:
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_safe
+    ret
+_w408:
+    mov rdi, 58
+    call match_cp
+    ret
+_w409:
+    mov rdi, 35
+    call match_cp
+    ret
+_w411:
+        call save_inp
+    call _w408
+    cmp byte [FAILED], 0
+    je .alt_ok_410
+    call restore_inp
+    call save_inp
+    call _w409
+    cmp byte [FAILED], 0
+    je .alt_ok_410
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_410:
+    ret
+_w412:
+    mov rdi, _w407
+    mov rsi, _w411
+    call peg_minus
+    ret
+_w413:
+    call ns_char
+    ret
+_w414:
+    mov rdi, _w413
+    call peg_behind
+    ret
+_w415:
+    mov rdi, 35
+    call match_cp
+    ret
+_w417:
+    call save_inp
+    call _w414
+    cmp byte [FAILED], 1
+    je .seq_fail_416
+    call _w415
+    cmp byte [FAILED], 1
+    je .seq_fail_416
+    jmp .seq_ok_416
+.seq_fail_416:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_416:
+    ret
+_w418:
+    mov rdi, 58
+    call match_cp
+    ret
+_w419:
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_safe
+    ret
+_w420:
+    mov rdi, _w419
+    call peg_ahead
+    ret
+_w422:
+    call save_inp
+    call _w418
+    cmp byte [FAILED], 1
+    je .seq_fail_421
+    call _w420
+    cmp byte [FAILED], 1
+    je .seq_fail_421
+    jmp .seq_ok_421
+.seq_fail_421:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_421:
+    ret
+_w425:
+        mov rdi, [c]
+    lea rsi, [str_flow_out]
+    call str_eq
+    test al, al
+    jz .sw_skip_424_0
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_multi_line
+    jmp .sw_end_424
+.sw_skip_424_0:
+    mov rdi, [c]
+    lea rsi, [str_flow_in]
+    call str_eq
+    test al, al
+    jz .sw_skip_424_1
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_multi_line
+    jmp .sw_end_424
+.sw_skip_424_1:
+    mov rdi, [c]
+    lea rsi, [str_block_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_424_2
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_one_line
+    jmp .sw_end_424
+.sw_skip_424_2:
+    mov rdi, [c]
+    lea rsi, [str_flow_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_424_3
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_one_line
+    jmp .sw_end_424
+.sw_skip_424_3:
+    call fail_no_case
+.sw_end_424:
+    ret
+_w426:
+    call s_white
+    ret
+_w427:
+    mov rdi, _w426
+    call peg_star
+    ret
+_w428:
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_char
+    ret
+_w430:
+    call save_inp
+    call _w427
+    cmp byte [FAILED], 1
+    je .seq_fail_429
+    call _w428
+    cmp byte [FAILED], 1
+    je .seq_fail_429
+    jmp .seq_ok_429
+.seq_fail_429:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_429:
+    ret
+_w431:
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_first
+    ret
+_w432:
+    mov rax, qword [c]
+    mov [c], rax
+    call nb_ns_plain_in_line
+    ret
+_w434:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_flow_folded
+    ret
+_w435:
+    call c_forbidden
+    ret
+_w436:
+    mov rdi, _w435
+    call peg_neg
+    ret
+_w437:
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_char
+    ret
+_w438:
+    mov rax, qword [c]
+    mov [c], rax
+    call nb_ns_plain_in_line
+    ret
+_w440:
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_one_line
+    ret
+_w441:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_ns_plain_next_line
+    ret
+_w442:
+    mov rdi, _w441
+    call peg_star
+    ret
+_w444:
+    mov rdi, 91
+    call match_cp
+    ret
+_w445:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w446:
+    mov rdi, _w445
+    call peg_opt
+    ret
+_w447:
+    mov rax, qword [c]
+    mov [pC], rax
+    call in_flow
+    mov rax, [RTAG]
+    mov [_arith_tmp], rax
+    ret
+_w448:
+    mov rax, qword [n]
+    mov [n], rax
+    call _w447
+    mov rax, qword [_arith_tmp]
+    mov [c], rax
+    call ns_s_flow_seq_entries
+    ret
+_w449:
+    mov rdi, _w448
+    call peg_collect
+    ret
+_w450:
+    mov rdi, _w449
+    call peg_opt
+    ret
+_w451:
+    mov rdi, 93
+    call match_cp
+    ret
+_w453:
+    call save_inp
+    call _w444
+    cmp byte [FAILED], 1
+    je .seq_fail_452
+    call _w446
+    cmp byte [FAILED], 1
+    je .seq_fail_452
+    call _w450
+    cmp byte [FAILED], 1
+    je .seq_fail_452
+    call _w451
+    cmp byte [FAILED], 1
+    je .seq_fail_452
+    jmp .seq_ok_452
+.seq_fail_452:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_452:
+    ret
+_w454:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_seq_entry
+    ret
+_w455:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w456:
+    mov rdi, _w455
+    call peg_opt
+    ret
+_w457:
+    mov rdi, 44
+    call match_cp
+    ret
+_w458:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w459:
+    mov rdi, _w458
+    call peg_opt
+    ret
+_w460:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_s_flow_seq_entries
+    ret
+_w461:
+    mov rdi, _w460
+    call peg_opt
+    ret
+_w463:
+    call save_inp
+    call _w457
+    cmp byte [FAILED], 1
+    je .seq_fail_462
+    call _w459
+    cmp byte [FAILED], 1
+    je .seq_fail_462
+    call _w461
+    cmp byte [FAILED], 1
+    je .seq_fail_462
+    jmp .seq_ok_462
+.seq_fail_462:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_462:
+    ret
+_w464:
+    mov rdi, _w463
+    call peg_opt
+    ret
+_w466:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_pair
+    ret
+_w467:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_node
+    ret
+_w469:
+    mov rdi, 123
+    call match_cp
+    ret
+_w470:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w471:
+    mov rdi, _w470
+    call peg_opt
+    ret
+_w472:
+    mov rax, qword [c]
+    mov [pC], rax
+    call in_flow
+    mov rax, [RTAG]
+    mov [_arith_tmp], rax
+    ret
+_w473:
+    mov rax, qword [n]
+    mov [n], rax
+    call _w472
+    mov rax, qword [_arith_tmp]
+    mov [c], rax
+    call ns_s_flow_map_entries
+    ret
+_w474:
+    mov rdi, _w473
+    call peg_collect
+    ret
+_w475:
+    mov rdi, _w474
+    call peg_opt
+    ret
+_w476:
+    mov rdi, 125
+    call match_cp
+    ret
+_w478:
+    call save_inp
+    call _w469
+    cmp byte [FAILED], 1
+    je .seq_fail_477
+    call _w471
+    cmp byte [FAILED], 1
+    je .seq_fail_477
+    call _w475
+    cmp byte [FAILED], 1
+    je .seq_fail_477
+    call _w476
+    cmp byte [FAILED], 1
+    je .seq_fail_477
+    jmp .seq_ok_477
+.seq_fail_477:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_477:
+    ret
+_w479:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_map_entry
+    ret
+_w480:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w481:
+    mov rdi, _w480
+    call peg_opt
+    ret
+_w482:
+    mov rdi, 44
+    call match_cp
+    ret
+_w483:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w484:
+    mov rdi, _w483
+    call peg_opt
+    ret
+_w485:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_s_flow_map_entries
+    ret
+_w486:
+    mov rdi, _w485
+    call peg_opt
+    ret
+_w488:
+    call save_inp
+    call _w482
+    cmp byte [FAILED], 1
+    je .seq_fail_487
+    call _w484
+    cmp byte [FAILED], 1
+    je .seq_fail_487
+    call _w486
+    cmp byte [FAILED], 1
+    je .seq_fail_487
+    jmp .seq_ok_487
+.seq_fail_487:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_487:
+    ret
+_w489:
+    mov rdi, _w488
+    call peg_opt
+    ret
+_w491:
+    mov rdi, 63
+    call match_cp
+    ret
+_w492:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w493:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_map_explicit_entry
+    ret
+_w495:
+    call save_inp
+    call _w491
+    cmp byte [FAILED], 1
+    je .seq_fail_494
+    call _w492
+    cmp byte [FAILED], 1
+    je .seq_fail_494
+    call _w493
+    cmp byte [FAILED], 1
+    je .seq_fail_494
+    jmp .seq_ok_494
+.seq_fail_494:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_494:
+    ret
+_w496:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_map_implicit_entry
+    ret
+_w498:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_map_implicit_entry
+    ret
+_w499:
+    call e_node
+    ret
+_w500:
+    call e_node
+    ret
+_w502:
+    call save_inp
+    call _w499
+    cmp byte [FAILED], 1
+    je .seq_fail_501
+    call _w500
+    cmp byte [FAILED], 1
+    je .seq_fail_501
+    jmp .seq_ok_501
+.seq_fail_501:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_501:
+    ret
+_w504:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_map_yaml_key_entry
+    ret
+_w505:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_flow_map_empty_key_entry
+    ret
+_w506:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_flow_map_json_key_entry
+    ret
+_w508:
+        call save_inp
+    call _w504
+    cmp byte [FAILED], 0
+    je .alt_ok_507
+    call restore_inp
+    call save_inp
+    call _w505
+    cmp byte [FAILED], 0
+    je .alt_ok_507
+    call restore_inp
+    call save_inp
+    call _w506
+    cmp byte [FAILED], 0
+    je .alt_ok_507
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_507:
+    ret
+_w509:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_yaml_node
+    ret
+_w510:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w511:
+    mov rdi, _w510
+    call peg_opt
+    ret
+_w512:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_flow_map_separate_value
+    ret
+_w514:
+    call save_inp
+    call _w511
+    cmp byte [FAILED], 1
+    je .seq_fail_513
+    call _w512
+    cmp byte [FAILED], 1
+    je .seq_fail_513
+    jmp .seq_ok_513
+.seq_fail_513:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_513:
+    ret
+_w515:
+    call e_node
+    ret
+_w517:
+        call save_inp
+    call _w514
+    cmp byte [FAILED], 0
+    je .alt_ok_516
+    call restore_inp
+    call save_inp
+    call _w515
+    cmp byte [FAILED], 0
+    je .alt_ok_516
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_516:
+    ret
+_w519:
+    call e_node
+    ret
+_w520:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_flow_map_separate_value
+    ret
+_w522:
+    mov rdi, 58
+    call match_cp
+    ret
+_w523:
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain_safe
+    ret
+_w524:
+    mov rdi, _w523
+    call peg_neg
+    ret
+_w525:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w526:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_node
+    ret
+_w528:
+    call save_inp
+    call _w525
+    cmp byte [FAILED], 1
+    je .seq_fail_527
+    call _w526
+    cmp byte [FAILED], 1
+    je .seq_fail_527
+    jmp .seq_ok_527
+.seq_fail_527:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_527:
+    ret
+_w529:
+    call e_node
+    ret
+_w531:
+        call save_inp
+    call _w528
+    cmp byte [FAILED], 0
+    je .alt_ok_530
+    call restore_inp
+    call save_inp
+    call _w529
+    cmp byte [FAILED], 0
+    je .alt_ok_530
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_530:
+    ret
+_w533:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_flow_json_node
+    ret
+_w534:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w535:
+    mov rdi, _w534
+    call peg_opt
+    ret
+_w536:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_flow_map_adjacent_value
+    ret
+_w538:
+    call save_inp
+    call _w535
+    cmp byte [FAILED], 1
+    je .seq_fail_537
+    call _w536
+    cmp byte [FAILED], 1
+    je .seq_fail_537
+    jmp .seq_ok_537
+.seq_fail_537:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_537:
+    ret
+_w539:
+    call e_node
+    ret
+_w541:
+        call save_inp
+    call _w538
+    cmp byte [FAILED], 0
+    je .alt_ok_540
+    call restore_inp
+    call save_inp
+    call _w539
+    cmp byte [FAILED], 0
+    je .alt_ok_540
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_540:
+    ret
+_w543:
+    mov rdi, 58
+    call match_cp
+    ret
+_w544:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w545:
+    mov rdi, _w544
+    call peg_opt
+    ret
+_w546:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_node
+    ret
+_w548:
+    call save_inp
+    call _w545
+    cmp byte [FAILED], 1
+    je .seq_fail_547
+    call _w546
+    cmp byte [FAILED], 1
+    je .seq_fail_547
+    jmp .seq_ok_547
+.seq_fail_547:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_547:
+    ret
+_w549:
+    call e_node
+    ret
+_w551:
+        call save_inp
+    call _w548
+    cmp byte [FAILED], 0
+    je .alt_ok_550
+    call restore_inp
+    call save_inp
+    call _w549
+    cmp byte [FAILED], 0
+    je .alt_ok_550
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_550:
+    ret
+_w553:
+    mov rdi, 63
+    call match_cp
+    ret
+_w554:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w555:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_map_explicit_entry
+    ret
+_w557:
+    call save_inp
+    call _w553
+    cmp byte [FAILED], 1
+    je .seq_fail_556
+    call _w554
+    cmp byte [FAILED], 1
+    je .seq_fail_556
+    call _w555
+    cmp byte [FAILED], 1
+    je .seq_fail_556
+    jmp .seq_ok_556
+.seq_fail_556:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_556:
+    ret
+_w558:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_pair_entry
+    ret
+_w560:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_pair_yaml_key_entry
+    ret
+_w561:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_flow_map_empty_key_entry
+    ret
+_w562:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_flow_pair_json_key_entry
+    ret
+_w564:
+    mov rax, str_flow_key
+    mov [c], rax
+    call ns_s_implicit_yaml_key
+    ret
+_w565:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_flow_map_separate_value
+    ret
+_w567:
+    mov rax, str_flow_key
+    mov [c], rax
+    call c_s_implicit_json_key
+    ret
+_w568:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_flow_map_adjacent_value
+    ret
+_w570:
+    mov rax, 0
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_yaml_node
+    ret
+_w571:
+    call s_separate_in_line
+    ret
+_w572:
+    mov rdi, _w571
+    call peg_opt
+    ret
+_w574:
+    mov rax, 0
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_flow_json_node
+    ret
+_w575:
+    call s_separate_in_line
+    ret
+_w576:
+    mov rdi, _w575
+    call peg_opt
+    ret
+_w578:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_flow_sequence
+    ret
+_w579:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_flow_mapping
+    ret
+_w580:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_single_quoted
+    ret
+_w581:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_double_quoted
+    ret
+_w583:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_yaml_content
+    ret
+_w584:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_flow_json_content
+    ret
+_w586:
+    call c_ns_alias_node
+    ret
+_w587:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_yaml_content
+    ret
+_w588:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_properties
+    ret
+_w589:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w590:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_yaml_content
+    ret
+_w592:
+    call save_inp
+    call _w589
+    cmp byte [FAILED], 1
+    je .seq_fail_591
+    call _w590
+    cmp byte [FAILED], 1
+    je .seq_fail_591
+    jmp .seq_ok_591
+.seq_fail_591:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_591:
+    ret
+_w593:
+    call e_scalar
+    ret
+_w595:
+        call save_inp
+    call _w592
+    cmp byte [FAILED], 0
+    je .alt_ok_594
+    call restore_inp
+    call save_inp
+    call _w593
+    cmp byte [FAILED], 0
+    je .alt_ok_594
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_594:
+    ret
+_w597:
+    call save_inp
+    call _w588
+    cmp byte [FAILED], 1
+    je .seq_fail_596
+    call _w595
+    cmp byte [FAILED], 1
+    je .seq_fail_596
+    jmp .seq_ok_596
+.seq_fail_596:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_596:
+    ret
+_w599:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_properties
+    ret
+_w600:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w602:
+    call save_inp
+    call _w599
+    cmp byte [FAILED], 1
+    je .seq_fail_601
+    call _w600
+    cmp byte [FAILED], 1
+    je .seq_fail_601
+    jmp .seq_ok_601
+.seq_fail_601:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_601:
+    ret
+_w603:
+    mov rdi, _w602
+    call peg_opt
+    ret
+_w604:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_flow_json_content
+    ret
+_w606:
+    call c_ns_alias_node
+    ret
+_w607:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_content
+    ret
+_w608:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_properties
+    ret
+_w609:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w610:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_flow_content
+    ret
+_w612:
+    call save_inp
+    call _w609
+    cmp byte [FAILED], 1
+    je .seq_fail_611
+    call _w610
+    cmp byte [FAILED], 1
+    je .seq_fail_611
+    jmp .seq_ok_611
+.seq_fail_611:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_611:
+    ret
+_w613:
+    call e_scalar
+    ret
+_w615:
+        call save_inp
+    call _w612
+    cmp byte [FAILED], 0
+    je .alt_ok_614
+    call restore_inp
+    call save_inp
+    call _w613
+    cmp byte [FAILED], 0
+    je .alt_ok_614
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_614:
+    ret
+_w617:
+    call save_inp
+    call _w608
+    cmp byte [FAILED], 1
+    je .seq_fail_616
+    call _w615
+    cmp byte [FAILED], 1
+    je .seq_fail_616
+    jmp .seq_ok_616
+.seq_fail_616:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_616:
+    ret
+_w619:
+    call ns_dec_digit
+    ret
+_w620:
+    mov rdi, _w619
+    call peg_parse_int
+    ret
+_w621:
+    mov rdi, qword [n]
+    call peg_detect_indent
+    ret
+_w623:
+    mov rdi, 45
+    call match_cp
+    ret
+_w624:
+    mov rdi, _w623
+    mov rsi, _str11
+    call peg_parse_sym
+    ret
+_w625:
+    mov rdi, 43
+    call match_cp
+    ret
+_w626:
+    mov rdi, _w625
+    mov rsi, _str12
+    call peg_parse_sym
+    ret
+_w627:
+    mov rdi, _str13
+    call peg_val
+    ret
+_w631:
+        call save_inp
+    call _w620
+    cmp byte [FAILED], 0
+    je .alt_ok_622
+    call restore_inp
+    call save_inp
+    call _w621
+    cmp byte [FAILED], 0
+    je .alt_ok_622
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_622:
+    cmp byte [FAILED], 1
+    je .let_fail_630
+    mov rax, [RTAGINT]
+    mov [m], rax
+    call save_inp
+        call save_inp
+    call _w624
+    cmp byte [FAILED], 0
+    je .alt_ok_628
+    call restore_inp
+    call save_inp
+    call _w626
+    cmp byte [FAILED], 0
+    je .alt_ok_628
+    call restore_inp
+    call save_inp
+    call _w627
+    cmp byte [FAILED], 0
+    je .alt_ok_628
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_628:
+    cmp byte [FAILED], 1
+    je .let_fail_629
+    mov rax, [RTAG]
+    mov [t], rax
+    call save_inp
+    call s_b_comment
+.let_fail_629:
+.let_fail_630:
+    ret
+_w632:
+    mov rdi, 45
+    call match_cp
+    ret
+_w633:
+    mov rdi, _w632
+    mov rsi, _str11
+    call peg_parse_sym
+    ret
+_w634:
+    mov rdi, 43
+    call match_cp
+    ret
+_w635:
+    mov rdi, _w634
+    mov rsi, _str12
+    call peg_parse_sym
+    ret
+_w636:
+    mov rdi, _str13
+    call peg_val
+    ret
+_w638:
+    call ns_dec_digit
+    ret
+_w639:
+    mov rdi, _w638
+    call peg_parse_int
+    ret
+_w640:
+    mov rdi, qword [n]
+    call peg_detect_indent
+    ret
+_w644:
+        call save_inp
+    call _w633
+    cmp byte [FAILED], 0
+    je .alt_ok_637
+    call restore_inp
+    call save_inp
+    call _w635
+    cmp byte [FAILED], 0
+    je .alt_ok_637
+    call restore_inp
+    call save_inp
+    call _w636
+    cmp byte [FAILED], 0
+    je .alt_ok_637
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_637:
+    cmp byte [FAILED], 1
+    je .let_fail_643
+    mov rax, [RTAG]
+    mov [t], rax
+    call save_inp
+        call save_inp
+    call _w639
+    cmp byte [FAILED], 0
+    je .alt_ok_641
+    call restore_inp
+    call save_inp
+    call _w640
+    cmp byte [FAILED], 0
+    je .alt_ok_641
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_641:
+    cmp byte [FAILED], 1
+    je .let_fail_642
+    mov rax, [RTAGINT]
+    mov [m], rax
+    call save_inp
+    call s_b_comment
+.let_fail_642:
+.let_fail_643:
+    ret
+_w646:
+    call ns_dec_digit
+    ret
+_w647:
+    call ok_r
+    ret
+_w649:
+    mov rdi, 45
+    call match_cp
+    ret
+_w650:
+    mov rdi, 43
+    call match_cp
+    ret
+_w651:
+    call ok_r
+    ret
+_w655:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent_le
+    ret
+_w656:
+    call b_non_content
+    ret
+_w658:
+    call save_inp
+    call _w655
+    cmp byte [FAILED], 1
+    je .seq_fail_657
+    call _w656
+    cmp byte [FAILED], 1
+    je .seq_fail_657
+    jmp .seq_ok_657
+.seq_fail_657:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_657:
+    ret
+_w659:
+    mov rdi, _w658
+    call peg_star
+    ret
+_w660:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_trail_comments
+    ret
+_w661:
+    mov rdi, _w660
+    call peg_opt
+    ret
+_w663:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_block_in
+    mov [c], rax
+    call l_empty
+    ret
+_w664:
+    mov rdi, _w663
+    call peg_star
+    ret
+_w665:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_trail_comments
+    ret
+_w666:
+    mov rdi, _w665
+    call peg_opt
+    ret
+_w668:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent_lt
+    ret
+_w669:
+    call c_nb_comment_text
+    ret
+_w670:
+    call b_comment
+    ret
+_w671:
+    call l_comment
+    ret
+_w672:
+    mov rdi, _w671
+    call peg_star
+    ret
+_w674:
+    mov rdi, 124
+    call match_cp
+    ret
+_w675:
+    call ns_dec_digit
+    ret
+_w676:
+    mov rdi, _w675
+    call peg_parse_int
+    ret
+_w677:
+    mov rdi, qword [n]
+    call peg_detect_indent
+    ret
+_w679:
+    mov rdi, 45
+    call match_cp
+    ret
+_w680:
+    mov rdi, _w679
+    mov rsi, _str11
+    call peg_parse_sym
+    ret
+_w681:
+    mov rdi, 43
+    call match_cp
+    ret
+_w682:
+    mov rdi, _w681
+    mov rsi, _str12
+    call peg_parse_sym
+    ret
+_w683:
+    mov rdi, _str13
+    call peg_val
+    ret
+_w685:
+    call s_b_comment
+    ret
+_w686:
+    mov rax, qword [n]
+    add rax, qword [m]
+    mov [_arith_tmp], rax
+    ret
+_w687:
+    call _w686
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    mov rax, qword [t]
+    mov [t], rax
+    call l_literal_content
+    ret
+_w691:
+        call save_inp
+    call _w676
+    cmp byte [FAILED], 0
+    je .alt_ok_678
+    call restore_inp
+    call save_inp
+    call _w677
+    cmp byte [FAILED], 0
+    je .alt_ok_678
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_678:
+    cmp byte [FAILED], 1
+    je .let_fail_690
+    mov rax, [RTAGINT]
+    mov [m], rax
+    call save_inp
+        call save_inp
+    call _w680
+    cmp byte [FAILED], 0
+    je .alt_ok_684
+    call restore_inp
+    call save_inp
+    call _w682
+    cmp byte [FAILED], 0
+    je .alt_ok_684
+    call restore_inp
+    call save_inp
+    call _w683
+    cmp byte [FAILED], 0
+    je .alt_ok_684
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_684:
+    cmp byte [FAILED], 1
+    je .let_fail_689
+    mov rax, [RTAG]
+    mov [t], rax
+    call save_inp
+    call save_inp
+    call _w685
+    cmp byte [FAILED], 1
+    je .seq_fail_688
+    call _w687
+    cmp byte [FAILED], 1
+    je .seq_fail_688
+    jmp .seq_ok_688
+.seq_fail_688:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_688:
+.let_fail_689:
+.let_fail_690:
+    ret
+_w693:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_block_in
+    mov [c], rax
+    call l_empty
+    ret
+_w694:
+    mov rdi, _w693
+    call peg_star
+    ret
+_w695:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent
+    ret
+_w696:
+    call nb_char
+    ret
+_w697:
+    mov rdi, _w696
+    call peg_plus
+    ret
+_w699:
+    call b_as_line_feed
+    ret
+_w700:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_nb_literal_text
+    ret
+_w702:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_nb_literal_text
+    ret
+_w703:
+    mov rax, qword [n]
+    mov [n], rax
+    call b_nb_literal_next
+    ret
+_w704:
+    mov rdi, _w703
+    call peg_star
+    ret
+_w705:
+    mov rax, qword [t]
+    mov [t], rax
+    call b_chomped_last
+    ret
+_w707:
+    call save_inp
+    call _w702
+    cmp byte [FAILED], 1
+    je .seq_fail_706
+    call _w704
+    cmp byte [FAILED], 1
+    je .seq_fail_706
+    call _w705
+    cmp byte [FAILED], 1
+    je .seq_fail_706
+    jmp .seq_ok_706
+.seq_fail_706:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_706:
+    ret
+_w708:
+    mov rdi, _w707
+    call peg_opt
+    ret
+_w709:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [t]
+    mov [t], rax
+    call l_chomped_empty
+    ret
+_w711:
+    call save_inp
+    call _w708
+    cmp byte [FAILED], 1
+    je .seq_fail_710
+    call _w709
+    cmp byte [FAILED], 1
+    je .seq_fail_710
+    jmp .seq_ok_710
+.seq_fail_710:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_710:
+    ret
+_w712:
+    mov rdi, 62
+    call match_cp
+    ret
+_w713:
+    call ns_dec_digit
+    ret
+_w714:
+    mov rdi, _w713
+    call peg_parse_int
+    ret
+_w715:
+    mov rdi, qword [n]
+    call peg_detect_indent
+    ret
+_w717:
+    mov rdi, 45
+    call match_cp
+    ret
+_w718:
+    mov rdi, _w717
+    mov rsi, _str11
+    call peg_parse_sym
+    ret
+_w719:
+    mov rdi, 43
+    call match_cp
+    ret
+_w720:
+    mov rdi, _w719
+    mov rsi, _str12
+    call peg_parse_sym
+    ret
+_w721:
+    mov rdi, _str13
+    call peg_val
+    ret
+_w723:
+    call s_b_comment
+    ret
+_w724:
+    mov rax, qword [n]
+    add rax, qword [m]
+    mov [_arith_tmp], rax
+    ret
+_w725:
+    call _w724
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    mov rax, qword [t]
+    mov [t], rax
+    call l_folded_content
+    ret
+_w729:
+        call save_inp
+    call _w714
+    cmp byte [FAILED], 0
+    je .alt_ok_716
+    call restore_inp
+    call save_inp
+    call _w715
+    cmp byte [FAILED], 0
+    je .alt_ok_716
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_716:
+    cmp byte [FAILED], 1
+    je .let_fail_728
+    mov rax, [RTAGINT]
+    mov [m], rax
+    call save_inp
+        call save_inp
+    call _w718
+    cmp byte [FAILED], 0
+    je .alt_ok_722
+    call restore_inp
+    call save_inp
+    call _w720
+    cmp byte [FAILED], 0
+    je .alt_ok_722
+    call restore_inp
+    call save_inp
+    call _w721
+    cmp byte [FAILED], 0
+    je .alt_ok_722
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_722:
+    cmp byte [FAILED], 1
+    je .let_fail_727
+    mov rax, [RTAG]
+    mov [t], rax
+    call save_inp
+    call save_inp
+    call _w723
+    cmp byte [FAILED], 1
+    je .seq_fail_726
+    call _w725
+    cmp byte [FAILED], 1
+    je .seq_fail_726
+    jmp .seq_ok_726
+.seq_fail_726:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_726:
+.let_fail_727:
+.let_fail_728:
+    ret
+_w731:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent
+    ret
+_w732:
+    call ns_char
+    ret
+_w733:
+    call nb_char
+    ret
+_w734:
+    mov rdi, _w733
+    call peg_star
+    ret
+_w736:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_nb_folded_text
+    ret
+_w737:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_block_in
+    mov [c], rax
+    call b_l_folded
+    ret
+_w738:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_nb_folded_text
+    ret
+_w740:
+    call save_inp
+    call _w737
+    cmp byte [FAILED], 1
+    je .seq_fail_739
+    call _w738
+    cmp byte [FAILED], 1
+    je .seq_fail_739
+    jmp .seq_ok_739
+.seq_fail_739:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_739:
+    ret
+_w741:
+    mov rdi, _w740
+    call peg_star
+    ret
+_w743:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent
+    ret
+_w744:
+    call s_white
+    ret
+_w745:
+    call nb_char
+    ret
+_w746:
+    mov rdi, _w745
+    call peg_star
+    ret
+_w748:
+    call b_as_line_feed
+    ret
+_w749:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_block_in
+    mov [c], rax
+    call l_empty
+    ret
+_w750:
+    mov rdi, _w749
+    call peg_star
+    ret
+_w752:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_nb_spaced_text
+    ret
+_w753:
+    mov rax, qword [n]
+    mov [n], rax
+    call b_l_spaced
+    ret
+_w754:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_nb_spaced_text
+    ret
+_w756:
+    call save_inp
+    call _w753
+    cmp byte [FAILED], 1
+    je .seq_fail_755
+    call _w754
+    cmp byte [FAILED], 1
+    je .seq_fail_755
+    jmp .seq_ok_755
+.seq_fail_755:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_755:
+    ret
+_w757:
+    mov rdi, _w756
+    call peg_star
+    ret
+_w759:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_block_in
+    mov [c], rax
+    call l_empty
+    ret
+_w760:
+    mov rdi, _w759
+    call peg_star
+    ret
+_w761:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_nb_folded_lines
+    ret
+_w762:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_nb_spaced_lines
+    ret
+_w764:
+        call save_inp
+    call _w761
+    cmp byte [FAILED], 0
+    je .alt_ok_763
+    call restore_inp
+    call save_inp
+    call _w762
+    cmp byte [FAILED], 0
+    je .alt_ok_763
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_763:
+    ret
+_w766:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_nb_same_lines
+    ret
+_w767:
+    call b_as_line_feed
+    ret
+_w768:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_nb_same_lines
+    ret
+_w770:
+    call save_inp
+    call _w767
+    cmp byte [FAILED], 1
+    je .seq_fail_769
+    call _w768
+    cmp byte [FAILED], 1
+    je .seq_fail_769
+    jmp .seq_ok_769
+.seq_fail_769:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_769:
+    ret
+_w771:
+    mov rdi, _w770
+    call peg_star
+    ret
+_w773:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_nb_diff_lines
+    ret
+_w774:
+    mov rax, qword [t]
+    mov [t], rax
+    call b_chomped_last
+    ret
+_w776:
+    call save_inp
+    call _w773
+    cmp byte [FAILED], 1
+    je .seq_fail_775
+    call _w774
+    cmp byte [FAILED], 1
+    je .seq_fail_775
+    jmp .seq_ok_775
+.seq_fail_775:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_775:
+    ret
+_w777:
+    mov rdi, _w776
+    call peg_opt
+    ret
+_w778:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [t]
+    mov [t], rax
+    call l_chomped_empty
+    ret
+_w780:
+    call save_inp
+    call _w777
+    cmp byte [FAILED], 1
+    je .seq_fail_779
+    call _w778
+    cmp byte [FAILED], 1
+    je .seq_fail_779
+    jmp .seq_ok_779
+.seq_fail_779:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_779:
+    ret
+_w781:
+    mov rax, qword [n]
+    add rax, qword [m]
+    mov [_arith_tmp], rax
+    ret
+_w782:
+    call _w781
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    call s_indent
+    ret
+_w783:
+    mov rax, qword [n]
+    add rax, qword [m]
+    mov [_arith_tmp], rax
+    ret
+_w784:
+    call _w783
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    call c_l_block_seq_entry
+    ret
+_w786:
+    call save_inp
+    call _w782
+    cmp byte [FAILED], 1
+    je .seq_fail_785
+    call _w784
+    cmp byte [FAILED], 1
+    je .seq_fail_785
+    jmp .seq_ok_785
+.seq_fail_785:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_785:
+    ret
+_w787:
+    mov rdi, _w786
+    call peg_plus
+    ret
+_w789:
+    mov rdi, qword [n]
+    call peg_detect_indent
+    cmp byte [FAILED], 1
+    je .let_fail_788
+    mov rax, [RTAGINT]
+    mov [m], rax
+    call save_inp
+    mov rdi, _w787
+    call peg_collect
+.let_fail_788:
+    ret
+_w790:
+    mov rdi, 45
+    call match_cp
+    ret
+_w791:
+    call ns_char
+    ret
+_w792:
+    mov rdi, _w791
+    call peg_neg
+    ret
+_w793:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_block_in
+    mov [c], rax
+    call s_lblock_indented
+    ret
+_w795:
+    mov rax, qword [m]
+    mov [n], rax
+    call s_indent
+    ret
+_w796:
+    mov rax, qword [n]
+    add rax, 1
+    add rax, qword [m]
+    mov [_arith_tmp], rax
+    ret
+_w797:
+    call _w796
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    call ns_l_compact_sequence
+    ret
+_w798:
+    mov rax, qword [n]
+    add rax, 1
+    add rax, qword [m]
+    mov [_arith_tmp], rax
+    ret
+_w799:
+    call _w798
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    call ns_l_compact_mapping
+    ret
+_w801:
+        call save_inp
+    call _w797
+    cmp byte [FAILED], 0
+    je .alt_ok_800
+    call restore_inp
+    call save_inp
+    call _w799
+    cmp byte [FAILED], 0
+    je .alt_ok_800
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_800:
+    ret
+_w804:
+    mov rdi, 0
+    call peg_detect_indent
+    cmp byte [FAILED], 1
+    je .let_fail_803
+    mov rax, [RTAGINT]
+    mov [m], rax
+    call save_inp
+    call save_inp
+    call _w795
+    cmp byte [FAILED], 1
+    je .seq_fail_802
+    call _w801
+    cmp byte [FAILED], 1
+    je .seq_fail_802
+    jmp .seq_ok_802
+.seq_fail_802:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_802:
+.let_fail_803:
+    ret
+_w805:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_lblock_node
+    ret
+_w806:
+    call e_node
+    ret
+_w807:
+    call s_l_comments
+    ret
+_w809:
+    call save_inp
+    call _w806
+    cmp byte [FAILED], 1
+    je .seq_fail_808
+    call _w807
+    cmp byte [FAILED], 1
+    je .seq_fail_808
+    jmp .seq_ok_808
+.seq_fail_808:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_808:
+    ret
+_w811:
+    mov rax, qword [n]
+    mov [n], rax
+    call c_l_block_seq_entry
+    ret
+_w812:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent
+    ret
+_w813:
+    mov rax, qword [n]
+    mov [n], rax
+    call c_l_block_seq_entry
+    ret
+_w815:
+    call save_inp
+    call _w812
+    cmp byte [FAILED], 1
+    je .seq_fail_814
+    call _w813
+    cmp byte [FAILED], 1
+    je .seq_fail_814
+    jmp .seq_ok_814
+.seq_fail_814:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_814:
+    ret
+_w816:
+    mov rdi, _w815
+    call peg_star
+    ret
+_w818:
+    mov rax, qword [n]
+    add rax, qword [m]
+    mov [_arith_tmp], rax
+    ret
+_w819:
+    call _w818
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    call s_indent
+    ret
+_w820:
+    mov rax, qword [n]
+    add rax, qword [m]
+    mov [_arith_tmp], rax
+    ret
+_w821:
+    call _w820
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    call ns_l_block_map_entry
+    ret
+_w823:
+    call save_inp
+    call _w819
+    cmp byte [FAILED], 1
+    je .seq_fail_822
+    call _w821
+    cmp byte [FAILED], 1
+    je .seq_fail_822
+    jmp .seq_ok_822
+.seq_fail_822:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_822:
+    ret
+_w824:
+    mov rdi, _w823
+    call peg_plus
+    ret
+_w826:
+    mov rdi, qword [n]
+    call peg_detect_indent
+    cmp byte [FAILED], 1
+    je .let_fail_825
+    mov rax, [RTAGINT]
+    mov [m], rax
+    call save_inp
+    mov rdi, _w824
+    call peg_collect
+.let_fail_825:
+    ret
+_w827:
+    mov rax, qword [n]
+    mov [n], rax
+    call c_l_block_map_explicit_entry
+    ret
+_w828:
+    mov rax, qword [n]
+    mov [n], rax
+    call ns_l_block_map_implicit_entry
+    ret
+_w830:
+    mov rax, qword [n]
+    mov [n], rax
+    call c_l_block_map_explicit_key
+    ret
+_w831:
+    mov rax, qword [n]
+    mov [n], rax
+    call l_block_map_explicit_value
+    ret
+_w832:
+    call e_node
+    ret
+_w834:
+        call save_inp
+    call _w831
+    cmp byte [FAILED], 0
+    je .alt_ok_833
+    call restore_inp
+    call save_inp
+    call _w832
+    cmp byte [FAILED], 0
+    je .alt_ok_833
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_833:
+    ret
+_w836:
+    mov rdi, 63
+    call match_cp
+    ret
+_w837:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_block_out
+    mov [c], rax
+    call s_lblock_indented
+    ret
+_w839:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent
+    ret
+_w840:
+    mov rdi, 58
+    call match_cp
+    ret
+_w841:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_block_out
+    mov [c], rax
+    call s_lblock_indented
+    ret
+_w843:
+    call ns_s_block_map_implicit_key
+    ret
+_w844:
+    call e_node
+    ret
+_w846:
+        call save_inp
+    call _w843
+    cmp byte [FAILED], 0
+    je .alt_ok_845
+    call restore_inp
+    call save_inp
+    call _w844
+    cmp byte [FAILED], 0
+    je .alt_ok_845
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_845:
+    ret
+_w847:
+    mov rdi, _w846
+    call peg_scalar
+    ret
+_w848:
+    mov rax, qword [n]
+    mov [n], rax
+    call c_l_block_map_implicit_value
+    ret
+_w850:
+    call save_inp
+    call _w847
+    cmp byte [FAILED], 1
+    je .seq_fail_849
+    call _w848
+    cmp byte [FAILED], 1
+    je .seq_fail_849
+    jmp .seq_ok_849
+.seq_fail_849:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_849:
+    ret
+_w851:
+    mov rax, str_block_key
+    mov [c], rax
+    call c_s_implicit_json_key
+    ret
+_w852:
+    mov rax, str_block_key
+    mov [c], rax
+    call ns_s_implicit_yaml_key
+    ret
+_w854:
+    mov rdi, 58
+    call match_cp
+    ret
+_w855:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, str_block_out
+    mov [c], rax
+    call s_lblock_node
+    ret
+_w856:
+    call e_node
+    ret
+_w857:
+    call s_l_comments
+    ret
+_w859:
+    call save_inp
+    call _w856
+    cmp byte [FAILED], 1
+    je .seq_fail_858
+    call _w857
+    cmp byte [FAILED], 1
+    je .seq_fail_858
+    jmp .seq_ok_858
+.seq_fail_858:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_858:
+    ret
+_w860:
+    mov rdi, _w859
+    call peg_scalar
+    ret
+_w862:
+        call save_inp
+    call _w855
+    cmp byte [FAILED], 0
+    je .alt_ok_861
+    call restore_inp
+    call save_inp
+    call _w860
+    cmp byte [FAILED], 0
+    je .alt_ok_861
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_861:
+    ret
+_w864:
+    mov rax, qword [n]
+    mov [n], rax
+    call ns_l_block_map_entry
+    ret
+_w865:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent
+    ret
+_w866:
+    mov rax, qword [n]
+    mov [n], rax
+    call ns_l_block_map_entry
+    ret
+_w868:
+    call save_inp
+    call _w865
+    cmp byte [FAILED], 1
+    je .seq_fail_867
+    call _w866
+    cmp byte [FAILED], 1
+    je .seq_fail_867
+    jmp .seq_ok_867
+.seq_fail_867:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_867:
+    ret
+_w869:
+    mov rdi, _w868
+    call peg_star
+    ret
+_w871:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_lblock_in_block
+    ret
+_w872:
+    mov rax, qword [n]
+    mov [n], rax
+    call s_lflow_in_block
+    ret
+_w874:
+    mov rax, qword [n]
+    add rax, 1
+    mov [_arith_tmp], rax
+    ret
+_w875:
+    call _w874
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    mov rax, str_flow_out
+    mov [c], rax
+    call s_separate
+    ret
+_w876:
+    mov rax, qword [n]
+    add rax, 1
+    mov [_arith_tmp], rax
+    ret
+_w877:
+    call _w876
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    mov rax, str_flow_out
+    mov [c], rax
+    call ns_flow_node
+    ret
+_w878:
+    call s_l_comments
+    ret
+_w880:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_lblock_scalar
+    ret
+_w881:
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_lblock_collection
+    ret
+_w883:
+    mov rax, qword [n]
+    add rax, 1
+    mov [_arith_tmp], rax
+    ret
+_w884:
+    call _w883
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w885:
+    mov rax, qword [n]
+    add rax, 1
+    mov [_arith_tmp], rax
+    ret
+_w886:
+    call _w885
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_properties
+    ret
+_w887:
+    mov rax, qword [n]
+    add rax, 1
+    mov [_arith_tmp], rax
+    ret
+_w888:
+    call _w887
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w890:
+    call save_inp
+    call _w886
+    cmp byte [FAILED], 1
+    je .seq_fail_889
+    call _w888
+    cmp byte [FAILED], 1
+    je .seq_fail_889
+    jmp .seq_ok_889
+.seq_fail_889:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_889:
+    ret
+_w891:
+    mov rdi, _w890
+    call peg_opt
+    ret
+_w892:
+    mov rax, qword [n]
+    mov [n], rax
+    call c_lliteral
+    ret
+_w893:
+    mov rax, qword [n]
+    mov [n], rax
+    call c_lfolded
+    ret
+_w895:
+        call save_inp
+    call _w892
+    cmp byte [FAILED], 0
+    je .alt_ok_894
+    call restore_inp
+    call save_inp
+    call _w893
+    cmp byte [FAILED], 0
+    je .alt_ok_894
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_894:
+    ret
+_w897:
+    mov rax, qword [n]
+    add rax, 1
+    mov [_arith_tmp], rax
+    ret
+_w898:
+    call _w897
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call s_separate
+    ret
+_w899:
+    mov rax, qword [n]
+    add rax, 1
+    mov [_arith_tmp], rax
+    ret
+_w900:
+    call _w899
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call c_ns_properties
+    ret
+_w902:
+    call save_inp
+    call _w898
+    cmp byte [FAILED], 1
+    je .seq_fail_901
+    call _w900
+    cmp byte [FAILED], 1
+    je .seq_fail_901
+    jmp .seq_ok_901
+.seq_fail_901:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_901:
+    ret
+_w903:
+    mov rdi, _w902
+    call peg_opt
+    ret
+_w904:
+    call s_l_comments
+    ret
+_w905:
+    mov rax, qword [n]
+    mov [pN], rax
+    mov rax, qword [c]
+    mov [pC], rax
+    call seq_spaces
+    mov rax, [RTAGINT]
+    mov [_arith_tmp], rax
+    ret
+_w906:
+    call _w905
+    mov rax, qword [_arith_tmp]
+    mov [n], rax
+    call lblock_sequence
+    ret
+_w907:
+    mov rax, qword [n]
+    mov [n], rax
+    call lblock_mapping
+    ret
+_w909:
+        call save_inp
+    call _w906
+    cmp byte [FAILED], 0
+    je .alt_ok_908
+    call restore_inp
+    call save_inp
+    call _w907
+    cmp byte [FAILED], 0
+    je .alt_ok_908
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_908:
+    ret
+_w911:
+    call c_byte_order_mark
+    ret
+_w912:
+    mov rdi, _w911
+    call peg_opt
+    ret
+_w913:
+    call l_comment
+    ret
+_w914:
+    mov rdi, _w913
+    call peg_star
+    ret
+_w916:
+    call c_document_end
+    ret
+_w917:
+    call s_l_comments
+    ret
+_w919:
+    call sol
+    ret
+_w920:
+    call c_directives_end
+    ret
+_w921:
+    call c_document_end
+    ret
+_w923:
+        call save_inp
+    call _w920
+    cmp byte [FAILED], 0
+    je .alt_ok_922
+    call restore_inp
+    call save_inp
+    call _w921
+    cmp byte [FAILED], 0
+    je .alt_ok_922
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_922:
+    ret
+_w924:
+    call b_char
+    ret
+_w925:
+    call s_white
+    ret
+_w926:
+    call eof_ok
+    ret
+_w928:
+        call save_inp
+    call _w924
+    cmp byte [FAILED], 0
+    je .alt_ok_927
+    call restore_inp
+    call save_inp
+    call _w925
+    cmp byte [FAILED], 0
+    je .alt_ok_927
+    call restore_inp
+    call save_inp
+    call _w926
+    cmp byte [FAILED], 0
+    je .alt_ok_927
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_927:
+    ret
+_w930:
+    mov rax, -1
+    mov [n], rax
+    mov rax, str_block_in
+    mov [c], rax
+    call s_lblock_node
+    ret
+_w931:
+    call c_directives_end
+    ret
+_w932:
+    call l_bare_document
+    ret
+_w933:
+    call e_node
+    ret
+_w934:
+    call s_l_comments
+    ret
+_w936:
+    call save_inp
+    call _w933
+    cmp byte [FAILED], 1
+    je .seq_fail_935
+    call _w934
+    cmp byte [FAILED], 1
+    je .seq_fail_935
+    jmp .seq_ok_935
+.seq_fail_935:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_935:
+    ret
+_w938:
+        call save_inp
+    call _w932
+    cmp byte [FAILED], 0
+    je .alt_ok_937
+    call restore_inp
+    call save_inp
+    call _w936
+    cmp byte [FAILED], 0
+    je .alt_ok_937
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_937:
+    ret
+_w940:
+    call save_inp
+    call _w931
+    cmp byte [FAILED], 1
+    je .seq_fail_939
+    call _w938
+    cmp byte [FAILED], 1
+    je .seq_fail_939
+    jmp .seq_ok_939
+.seq_fail_939:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_939:
+    ret
+_w941:
+    call l_directive
+    ret
+_w942:
+    mov rdi, _w941
+    call peg_plus
+    ret
+_w943:
+    call l_explicit_document
+    ret
+_w945:
+    call l_directive_document
+    ret
+_w946:
+    call l_explicit_document
+    ret
+_w947:
+    call l_bare_document
+    ret
+_w949:
+    call l_document_prefix
+    ret
+_w950:
+    mov rdi, _w949
+    call peg_star
+    ret
+_w951:
+    call l_any_document
+    ret
+_w952:
+    mov rdi, _w951
+    call peg_opt
+    ret
+_w953:
+    call l_document_suffix
+    ret
+_w954:
+    mov rdi, _w953
+    call peg_plus
+    ret
+_w955:
+    call l_document_prefix
+    ret
+_w956:
+    mov rdi, _w955
+    call peg_star
+    ret
+_w957:
+    call l_any_document
+    ret
+_w958:
+    mov rdi, _w957
+    call peg_opt
+    ret
+_w960:
+    call save_inp
+    call _w954
+    cmp byte [FAILED], 1
+    je .seq_fail_959
+    call _w956
+    cmp byte [FAILED], 1
+    je .seq_fail_959
+    call _w958
+    cmp byte [FAILED], 1
+    je .seq_fail_959
+    jmp .seq_ok_959
+.seq_fail_959:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_959:
+    ret
+_w961:
+    call l_document_prefix
+    ret
+_w962:
+    mov rdi, _w961
+    call peg_star
+    ret
+_w963:
+    call l_explicit_document
+    ret
+_w964:
+    mov rdi, _w963
+    call peg_opt
+    ret
+_w966:
+    call save_inp
+    call _w962
+    cmp byte [FAILED], 1
+    je .seq_fail_965
+    call _w964
+    cmp byte [FAILED], 1
+    je .seq_fail_965
+    jmp .seq_ok_965
+.seq_fail_965:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_965:
+    ret
+_w968:
+        call save_inp
+    call _w960
+    cmp byte [FAILED], 0
+    je .alt_ok_967
+    call restore_inp
+    call save_inp
+    call _w966
+    cmp byte [FAILED], 0
+    je .alt_ok_967
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_967:
+    ret
+_w969:
+    mov rdi, _w968
+    call peg_star
+    ret
+_w971:
+    call save_inp
+    call _w950
+    cmp byte [FAILED], 1
+    je .seq_fail_970
+    call _w952
+    cmp byte [FAILED], 1
+    je .seq_fail_970
+    call _w969
+    cmp byte [FAILED], 1
+    je .seq_fail_970
+    jmp .seq_ok_970
+.seq_fail_970:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_970:
+    ret
+
+; ════════════════════════════════════════════════════════════════ 
+; YAML 1.2 Grammar — 211 rules 
+; ════════════════════════════════════════════════════════════════ 
+
+; [1] C-PRINTABLE 
+c_printable:
+        call save_inp
+    call _w1
+    cmp byte [FAILED], 0
+    je .alt_ok_9
+    call restore_inp
+    call save_inp
+    call _w2
+    cmp byte [FAILED], 0
+    je .alt_ok_9
+    call restore_inp
+    call save_inp
+    call _w3
+    cmp byte [FAILED], 0
+    je .alt_ok_9
+    call restore_inp
+    call save_inp
+    call _w4
+    cmp byte [FAILED], 0
+    je .alt_ok_9
+    call restore_inp
+    call save_inp
+    call _w5
+    cmp byte [FAILED], 0
+    je .alt_ok_9
+    call restore_inp
+    call save_inp
+    call _w6
+    cmp byte [FAILED], 0
+    je .alt_ok_9
+    call restore_inp
+    call save_inp
+    call _w7
+    cmp byte [FAILED], 0
+    je .alt_ok_9
+    call restore_inp
+    call save_inp
+    call _w8
+    cmp byte [FAILED], 0
+    je .alt_ok_9
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_9:
+    ret
+
+
+; [2] NB-JSON 
+nb_json:
+        call save_inp
+    call _w10
+    cmp byte [FAILED], 0
+    je .alt_ok_12
+    call restore_inp
+    call save_inp
+    call _w11
+    cmp byte [FAILED], 0
+    je .alt_ok_12
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_12:
+    ret
+
+
+; [3] C-BYTE-ORDER-MARK 
+c_byte_order_mark:
+    mov rdi, 0xFEFF
+    call match_cp
+    ret
+
+
+; [4] C-SEQUENCE-ENTRY 
+c_sequence_entry:
+    mov rdi, 45
+    call match_cp
+    ret
+
+
+; [5] C-MAPPING-KEY 
+c_mapping_key:
+    mov rdi, 63
+    call match_cp
+    ret
+
+
+; [6] C-MAPPING-VALUE 
+c_mapping_value:
+    mov rdi, 58
+    call match_cp
+    ret
+
+
+; [7] C-COLLECT-ENTRY 
+c_collect_entry:
+    mov rdi, 44
+    call match_cp
+    ret
+
+
+; [8] C-SEQUENCE-START 
+c_sequence_start:
+    mov rdi, 91
+    call match_cp
+    ret
+
+
+; [9] C-SEQUENCE-END 
+c_sequence_end:
+    mov rdi, 93
+    call match_cp
+    ret
+
+
+; [10] C-MAPPING-START 
+c_mapping_start:
+    mov rdi, 123
+    call match_cp
+    ret
+
+
+; [11] C-MAPPING-END 
+c_mapping_end:
+    mov rdi, 125
+    call match_cp
+    ret
+
+
+; [12] C-COMMENT 
+c_comment:
+    mov rdi, 35
+    call match_cp
+    ret
+
+
+; [13] C-ANCHOR 
+c_anchor:
+    mov rdi, 38
+    call match_cp
+    ret
+
+
+; [14] C-ALIAS 
+c_alias:
+    mov rdi, 42
+    call match_cp
+    ret
+
+
+; [15] C-TAG 
+c_tag:
+    mov rdi, 33
+    call match_cp
+    ret
+
+
+; [16] C-LITERAL 
+c_literal:
+    mov rdi, 124
+    call match_cp
+    ret
+
+
+; [17] C-FOLDED 
+c_folded:
+    mov rdi, 62
+    call match_cp
+    ret
+
+
+; [18] C-SINGLE-QUOTE 
+c_single_quote:
+    mov rdi, 39
+    call match_cp
+    ret
+
+
+; [19] C-DOUBLE-QUOTE 
+c_double_quote:
+    mov rdi, 34
+    call match_cp
+    ret
+
+
+; [20] C-DIRECTIVE 
+c_directive:
+    mov rdi, 37
+    call match_cp
+    ret
+
+
+; [21] C-RESERVED 
+c_reserved:
+        call save_inp
+    call _w13
+    cmp byte [FAILED], 0
+    je .alt_ok_15
+    call restore_inp
+    call save_inp
+    call _w14
+    cmp byte [FAILED], 0
+    je .alt_ok_15
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_15:
+    ret
+
+
+; [22] C-INDICATOR 
+c_indicator:
+        call save_inp
+    call _w16
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w17
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w18
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w19
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w20
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w21
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w22
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w23
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w24
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w25
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w26
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w27
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w28
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w29
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w30
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w31
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w32
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    call save_inp
+    call _w33
+    cmp byte [FAILED], 0
+    je .alt_ok_34
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_34:
+    ret
+
+
+; [23] C-FLOW-INDICATOR 
+c_flow_indicator:
+        call save_inp
+    call _w35
+    cmp byte [FAILED], 0
+    je .alt_ok_40
+    call restore_inp
+    call save_inp
+    call _w36
+    cmp byte [FAILED], 0
+    je .alt_ok_40
+    call restore_inp
+    call save_inp
+    call _w37
+    cmp byte [FAILED], 0
+    je .alt_ok_40
+    call restore_inp
+    call save_inp
+    call _w38
+    cmp byte [FAILED], 0
+    je .alt_ok_40
+    call restore_inp
+    call save_inp
+    call _w39
+    cmp byte [FAILED], 0
+    je .alt_ok_40
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_40:
+    ret
+
+
+; [24] B-LINE-FEED 
+b_line_feed:
+    mov rdi, 0x0A
+    call match_cp
+    ret
+
+
+; [25] B-CARRIAGE-RETURN 
+b_carriage_return:
+    mov rdi, 0x0D
+    call match_cp
+    ret
+
+
+; [26] B-CHAR 
+b_char:
+        call save_inp
+    call _w41
+    cmp byte [FAILED], 0
+    je .alt_ok_43
+    call restore_inp
+    call save_inp
+    call _w42
+    cmp byte [FAILED], 0
+    je .alt_ok_43
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_43:
+    ret
+
+
+; [27] NB-CHAR 
+nb_char:
+    mov rdi, _w44
+    mov rsi, _w48
+    call peg_minus
+    ret
+
+
+; [28] B-BREAK 
+b_break:
+        call save_inp
+    call _w52
+    cmp byte [FAILED], 0
+    je .alt_ok_55
+    call restore_inp
+    call save_inp
+    call _w53
+    cmp byte [FAILED], 0
+    je .alt_ok_55
+    call restore_inp
+    call save_inp
+    call _w54
+    cmp byte [FAILED], 0
+    je .alt_ok_55
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_55:
+    ret
+
+
+; [29] B-AS-LINE-FEED 
+b_as_line_feed:
+    call b_break
+    ret
+
+
+; [30] B-NON-CONTENT 
+b_non_content:
+    call b_break
+    ret
+
+
+; [31] S-SPACE 
+s_space:
+    mov rdi, 0x20
+    call match_cp
+    ret
+
+
+; [32] S-TAB 
+s_tab:
+    mov rdi, 0x9
+    call match_cp
+    ret
+
+
+; [33] S-WHITE 
+s_white:
+        call save_inp
+    call _w56
+    cmp byte [FAILED], 0
+    je .alt_ok_58
+    call restore_inp
+    call save_inp
+    call _w57
+    cmp byte [FAILED], 0
+    je .alt_ok_58
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_58:
+    ret
+
+
+; [34] NS-CHAR 
+ns_char:
+    mov rdi, _w59
+    mov rsi, _w60
+    call peg_minus
+    ret
+
+
+; [35] NS-DEC-DIGIT 
+ns_dec_digit:
+    mov rdi, 0x30
+    mov rsi, 0x39
+    call match_range
+    ret
+
+
+; [36] NS-HEX-DIGIT 
+ns_hex_digit:
+        call save_inp
+    call _w61
+    cmp byte [FAILED], 0
+    je .alt_ok_64
+    call restore_inp
+    call save_inp
+    call _w62
+    cmp byte [FAILED], 0
+    je .alt_ok_64
+    call restore_inp
+    call save_inp
+    call _w63
+    cmp byte [FAILED], 0
+    je .alt_ok_64
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_64:
+    ret
+
+
+; [37] NS-ASCII-LETTER 
+ns_ascii_letter:
+        call save_inp
+    call _w65
+    cmp byte [FAILED], 0
+    je .alt_ok_67
+    call restore_inp
+    call save_inp
+    call _w66
+    cmp byte [FAILED], 0
+    je .alt_ok_67
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_67:
+    ret
+
+
+; [38] NS-WORD-CHAR 
+ns_word_char:
+        call save_inp
+    call _w68
+    cmp byte [FAILED], 0
+    je .alt_ok_71
+    call restore_inp
+    call save_inp
+    call _w69
+    cmp byte [FAILED], 0
+    je .alt_ok_71
+    call restore_inp
+    call save_inp
+    call _w70
+    cmp byte [FAILED], 0
+    je .alt_ok_71
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_71:
+    ret
+
+
+; [39] NS-URI-CHAR 
+ns_uri_char:
+        call save_inp
+    call _w76
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w77
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w78
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w79
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w80
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w81
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w82
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w83
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w84
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w85
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w86
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w87
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w88
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w89
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w90
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w91
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w92
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w93
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w94
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w95
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w96
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w97
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    call save_inp
+    call _w98
+    cmp byte [FAILED], 0
+    je .alt_ok_99
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_99:
+    ret
+
+
+; [40] NS-TAG-CHAR 
+ns_tag_char:
+    mov rdi, _w100
+    mov rsi, _w104
+    call peg_minus
+    ret
+
+
+; [41] C-ESCAPE 
+c_escape:
+    mov rdi, 92
+    call match_cp
+    ret
+
+
+; [42] NS-ESC-NULL 
+ns_esc_null:
+    mov rdi, 48
+    call match_cp
+    ret
+
+
+; [43] NS-ESC-BELL 
+ns_esc_bell:
+    mov rdi, 97
+    call match_cp
+    ret
+
+
+; [44] NS-ESC-BACKSPACE 
+ns_esc_backspace:
+    mov rdi, 98
+    call match_cp
+    ret
+
+
+; [45] NS-ESC-HORIZONTAL-TAB 
+ns_esc_horizontal_tab:
+    mov rdi, 116
+    call match_cp
+    ret
+
+
+; [46] NS-ESC-LINE-FEED 
+ns_esc_line_feed:
+    mov rdi, 110
+    call match_cp
+    ret
+
+
+; [47] NS-ESC-VERTICAL-TAB 
+ns_esc_vertical_tab:
+    mov rdi, 118
+    call match_cp
+    ret
+
+
+; [48] NS-ESC-FORM-FEED 
+ns_esc_form_feed:
+    mov rdi, 102
+    call match_cp
+    ret
+
+
+; [49] NS-ESC-CARRIAGE-RETURN 
+ns_esc_carriage_return:
+    mov rdi, 114
+    call match_cp
+    ret
+
+
+; [50] NS-ESC-ESCAPE 
+ns_esc_escape:
+    mov rdi, 101
+    call match_cp
+    ret
+
+
+; [51] NS-ESC-SPACE 
+ns_esc_space:
+    mov rdi, 0x20
+    call match_cp
+    ret
+
+
+; [52] NS-ESC-DOUBLE-QUOTE 
+ns_esc_double_quote:
+    mov rdi, 34
+    call match_cp
+    ret
+
+
+; [53] NS-ESC-SLASH 
+ns_esc_slash:
+    mov rdi, 47
+    call match_cp
+    ret
+
+
+; [54] NS-ESC-BACKSLASH 
+ns_esc_backslash:
+    mov rdi, 92
+    call match_cp
+    ret
+
+
+; [55] NS-ESC-NEXT-LINE 
+ns_esc_next_line:
+    mov rdi, 78
+    call match_cp
+    ret
+
+
+; [56] NS-ESC-NON-BREAKING-SPACE 
+ns_esc_non_breaking_space:
+    mov rdi, 95
+    call match_cp
+    ret
+
+
+; [57] NS-ESC-LINE-SEPARATOR 
+ns_esc_line_separator:
+    mov rdi, 76
+    call match_cp
+    ret
+
+
+; [58] NS-ESC-PARAGRAPH-SEPARATOR 
+ns_esc_paragraph_separator:
+    mov rdi, 80
+    call match_cp
+    ret
+
+
+; [59] NS-ESC-8-BIT 
+ns_esc_8_bit:
+    call save_inp
+    call _w105
+    cmp byte [FAILED], 1
+    je .seq_fail_108
+    call _w107
+    cmp byte [FAILED], 1
+    je .seq_fail_108
+    jmp .seq_ok_108
+.seq_fail_108:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_108:
+    ret
+
+
+; [60] NS-ESC-16-BIT 
+ns_esc_16_bit:
+    call save_inp
+    call _w109
+    cmp byte [FAILED], 1
+    je .seq_fail_112
+    call _w111
+    cmp byte [FAILED], 1
+    je .seq_fail_112
+    jmp .seq_ok_112
+.seq_fail_112:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_112:
+    ret
+
+
+; [61] NS-ESC-32-BIT 
+ns_esc_32_bit:
+    call save_inp
+    call _w113
+    cmp byte [FAILED], 1
+    je .seq_fail_116
+    call _w115
+    cmp byte [FAILED], 1
+    je .seq_fail_116
+    jmp .seq_ok_116
+.seq_fail_116:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_116:
+    ret
+
+
+; [62] C-NS-ESC-CHAR 
+c_ns_esc_char:
+    call save_inp
+    call _w117
+    cmp byte [FAILED], 1
+    je .seq_fail_140
+    call _w139
+    cmp byte [FAILED], 1
+    je .seq_fail_140
+    jmp .seq_ok_140
+.seq_fail_140:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_140:
+    ret
+
+
+; [63] S-INDENT 
+s_indent:
+    ; param n = int (in [n])
+    mov rdi, qword [n]
+    mov rsi, _w141
+    call peg_rep
+    ret
+
+
+; [64] S-INDENT-LT 
+s_indent_lt:
+    ; param n = int (in [n])
+    mov rdi, _w142
+    call peg_star
+    ret
+
+
+; [65] S-INDENT-LE 
+s_indent_le:
+    ; param n = int (in [n])
+    mov rdi, _w143
+    call peg_star
+    ret
+
+
+; [66] S-SEPARATE-IN-LINE 
+s_separate_in_line:
+        call save_inp
+    call _w145
+    cmp byte [FAILED], 0
+    je .alt_ok_147
+    call restore_inp
+    call save_inp
+    call _w146
+    cmp byte [FAILED], 0
+    je .alt_ok_147
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_147:
+    ret
+
+
+; [67] S-LINE-PREFIX 
+s_line_prefix:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        mov rdi, [c]
+    lea rsi, [str_block_in]
+    call str_eq
+    test al, al
+    jz .sw_skip_148_0
+    mov rax, qword [n]
+    mov [n], rax
+    call s_block_line_prefix
+    jmp .sw_end_148
+.sw_skip_148_0:
+    mov rdi, [c]
+    lea rsi, [str_block_out]
+    call str_eq
+    test al, al
+    jz .sw_skip_148_1
+    mov rax, qword [n]
+    mov [n], rax
+    call s_block_line_prefix
+    jmp .sw_end_148
+.sw_skip_148_1:
+    mov rdi, [c]
+    lea rsi, [str_flow_in]
+    call str_eq
+    test al, al
+    jz .sw_skip_148_2
+    mov rax, qword [n]
+    mov [n], rax
+    call s_flow_line_prefix
+    jmp .sw_end_148
+.sw_skip_148_2:
+    mov rdi, [c]
+    lea rsi, [str_flow_out]
+    call str_eq
+    test al, al
+    jz .sw_skip_148_3
+    mov rax, qword [n]
+    mov [n], rax
+    call s_flow_line_prefix
+    jmp .sw_end_148
+.sw_skip_148_3:
+    call fail_no_case
+.sw_end_148:
+    ret
+
+
+; [68] S-BLOCK-LINE-PREFIX 
+s_block_line_prefix:
+    ; param n = int (in [n])
+    mov rax, qword [n]
+    mov [n], rax
+    call s_indent
+    ret
+
+
+; [69] S-FLOW-LINE-PREFIX 
+s_flow_line_prefix:
+    ; param n = int (in [n])
+    call save_inp
+    call _w149
+    cmp byte [FAILED], 1
+    je .seq_fail_152
+    call _w151
+    cmp byte [FAILED], 1
+    je .seq_fail_152
+    jmp .seq_ok_152
+.seq_fail_152:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_152:
+    ret
+
+
+; [70] L-EMPTY 
+l_empty:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w156
+    cmp byte [FAILED], 1
+    je .seq_fail_158
+    call _w157
+    cmp byte [FAILED], 1
+    je .seq_fail_158
+    jmp .seq_ok_158
+.seq_fail_158:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_158:
+    ret
+
+
+; [71] B-L-TRIMMED 
+b_l_trimmed:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w159
+    cmp byte [FAILED], 1
+    je .seq_fail_162
+    call _w161
+    cmp byte [FAILED], 1
+    je .seq_fail_162
+    jmp .seq_ok_162
+.seq_fail_162:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_162:
+    ret
+
+
+; [72] B-AS-SPACE 
+b_as_space:
+    call b_break
+    ret
+
+
+; [73] B-L-FOLDED 
+b_l_folded:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w163
+    cmp byte [FAILED], 0
+    je .alt_ok_165
+    call restore_inp
+    call save_inp
+    call _w164
+    cmp byte [FAILED], 0
+    je .alt_ok_165
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_165:
+    ret
+
+
+; [74] S-FLOW-FOLDED 
+s_flow_folded:
+    ; param n = int (in [n])
+    call save_inp
+    call _w167
+    cmp byte [FAILED], 1
+    je .seq_fail_170
+    call _w168
+    cmp byte [FAILED], 1
+    je .seq_fail_170
+    call _w169
+    cmp byte [FAILED], 1
+    je .seq_fail_170
+    jmp .seq_ok_170
+.seq_fail_170:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_170:
+    ret
+
+
+; [75] C-NB-COMMENT-TEXT 
+c_nb_comment_text:
+    call save_inp
+    call _w171
+    cmp byte [FAILED], 1
+    je .seq_fail_174
+    call _w173
+    cmp byte [FAILED], 1
+    je .seq_fail_174
+    jmp .seq_ok_174
+.seq_fail_174:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_174:
+    ret
+
+
+; [76] B-COMMENT 
+b_comment:
+        call save_inp
+    call _w175
+    cmp byte [FAILED], 0
+    je .alt_ok_177
+    call restore_inp
+    call save_inp
+    call _w176
+    cmp byte [FAILED], 0
+    je .alt_ok_177
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_177:
+    ret
+
+
+; [77] S-B-COMMENT 
+s_b_comment:
+    call save_inp
+    call _w183
+    cmp byte [FAILED], 1
+    je .seq_fail_185
+    call _w184
+    cmp byte [FAILED], 1
+    je .seq_fail_185
+    jmp .seq_ok_185
+.seq_fail_185:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_185:
+    ret
+
+
+; [78] L-COMMENT 
+l_comment:
+    call save_inp
+    call _w186
+    cmp byte [FAILED], 1
+    je .seq_fail_190
+    call _w188
+    cmp byte [FAILED], 1
+    je .seq_fail_190
+    call _w189
+    cmp byte [FAILED], 1
+    je .seq_fail_190
+    jmp .seq_ok_190
+.seq_fail_190:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_190:
+    ret
+
+
+; [79] S-L-COMMENTS 
+s_l_comments:
+    call save_inp
+    call _w194
+    cmp byte [FAILED], 1
+    je .seq_fail_197
+    call _w196
+    cmp byte [FAILED], 1
+    je .seq_fail_197
+    jmp .seq_ok_197
+.seq_fail_197:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_197:
+    ret
+
+
+; [80] S-SEPARATE 
+s_separate:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        mov rdi, [c]
+    lea rsi, [str_block_out]
+    call str_eq
+    test al, al
+    jz .sw_skip_198_0
+    mov rax, qword [n]
+    mov [n], rax
+    call s_separate_lines
+    jmp .sw_end_198
+.sw_skip_198_0:
+    mov rdi, [c]
+    lea rsi, [str_block_in]
+    call str_eq
+    test al, al
+    jz .sw_skip_198_1
+    mov rax, qword [n]
+    mov [n], rax
+    call s_separate_lines
+    jmp .sw_end_198
+.sw_skip_198_1:
+    mov rdi, [c]
+    lea rsi, [str_flow_out]
+    call str_eq
+    test al, al
+    jz .sw_skip_198_2
+    mov rax, qword [n]
+    mov [n], rax
+    call s_separate_lines
+    jmp .sw_end_198
+.sw_skip_198_2:
+    mov rdi, [c]
+    lea rsi, [str_flow_in]
+    call str_eq
+    test al, al
+    jz .sw_skip_198_3
+    mov rax, qword [n]
+    mov [n], rax
+    call s_separate_lines
+    jmp .sw_end_198
+.sw_skip_198_3:
+    mov rdi, [c]
+    lea rsi, [str_block_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_198_4
+    call s_separate_in_line
+    jmp .sw_end_198
+.sw_skip_198_4:
+    mov rdi, [c]
+    lea rsi, [str_flow_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_198_5
+    call s_separate_in_line
+    jmp .sw_end_198
+.sw_skip_198_5:
+    call fail_no_case
+.sw_end_198:
+    ret
+
+
+; [81] S-SEPARATE-LINES 
+s_separate_lines:
+    ; param n = int (in [n])
+        call save_inp
+    call _w202
+    cmp byte [FAILED], 0
+    je .alt_ok_204
+    call restore_inp
+    call save_inp
+    call _w203
+    cmp byte [FAILED], 0
+    je .alt_ok_204
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_204:
+    ret
+
+
+; [82] L-DIRECTIVE 
+l_directive:
+    call save_inp
+    call _w205
+    cmp byte [FAILED], 1
+    je .seq_fail_212
+    call _w210
+    cmp byte [FAILED], 1
+    je .seq_fail_212
+    call _w211
+    cmp byte [FAILED], 1
+    je .seq_fail_212
+    jmp .seq_ok_212
+.seq_fail_212:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_212:
+    ret
+
+
+; [83] NS-RESERVED-DIRECTIVE 
+ns_reserved_directive:
+    call save_inp
+    call _w213
+    cmp byte [FAILED], 1
+    je .seq_fail_219
+    call _w218
+    cmp byte [FAILED], 1
+    je .seq_fail_219
+    jmp .seq_ok_219
+.seq_fail_219:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_219:
+    ret
+
+
+; [84] NS-DIRECTIVE-NAME 
+ns_directive_name:
+    mov rdi, _w220
+    call peg_plus
+    ret
+
+
+; [85] NS-DIRECTIVE-PARAMETER 
+ns_directive_parameter:
+    mov rdi, _w221
+    call peg_plus
+    ret
+
+
+; [86] NS-YAML-DIRECTIVE 
+ns_yaml_directive:
+    call save_inp
+    call _w222
+    cmp byte [FAILED], 1
+    je .seq_fail_225
+    call _w223
+    cmp byte [FAILED], 1
+    je .seq_fail_225
+    call _w224
+    cmp byte [FAILED], 1
+    je .seq_fail_225
+    jmp .seq_ok_225
+.seq_fail_225:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_225:
+    ret
+
+
+; [87] NS-YAML-VERSION 
+ns_yaml_version:
+    call save_inp
+    call _w227
+    cmp byte [FAILED], 1
+    je .seq_fail_231
+    call _w228
+    cmp byte [FAILED], 1
+    je .seq_fail_231
+    call _w230
+    cmp byte [FAILED], 1
+    je .seq_fail_231
+    jmp .seq_ok_231
+.seq_fail_231:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_231:
+    ret
+
+
+; [88] NS-TAG-DIRECTIVE 
+ns_tag_directive:
+    call save_inp
+    call _w232
+    cmp byte [FAILED], 1
+    je .seq_fail_237
+    call _w233
+    cmp byte [FAILED], 1
+    je .seq_fail_237
+    call _w234
+    cmp byte [FAILED], 1
+    je .seq_fail_237
+    call _w235
+    cmp byte [FAILED], 1
+    je .seq_fail_237
+    call _w236
+    cmp byte [FAILED], 1
+    je .seq_fail_237
+    jmp .seq_ok_237
+.seq_fail_237:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_237:
+    ret
+
+
+; [89] C-TAG-HANDLE 
+c_tag_handle:
+        call save_inp
+    call _w238
+    cmp byte [FAILED], 0
+    je .alt_ok_241
+    call restore_inp
+    call save_inp
+    call _w239
+    cmp byte [FAILED], 0
+    je .alt_ok_241
+    call restore_inp
+    call save_inp
+    call _w240
+    cmp byte [FAILED], 0
+    je .alt_ok_241
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_241:
+    ret
+
+
+; [90] C-PRIMARY-TAG-HANDLE 
+c_primary_tag_handle:
+    mov rdi, 33
+    call match_cp
+    ret
+
+
+; [91] C-SECONDARY-TAG-HANDLE 
+c_secondary_tag_handle:
+    mov rdi, _str3
+    call match_str
+    ret
+
+
+; [92] C-NAMED-TAG-HANDLE 
+c_named_tag_handle:
+    call save_inp
+    call _w242
+    cmp byte [FAILED], 1
+    je .seq_fail_246
+    call _w244
+    cmp byte [FAILED], 1
+    je .seq_fail_246
+    call _w245
+    cmp byte [FAILED], 1
+    je .seq_fail_246
+    jmp .seq_ok_246
+.seq_fail_246:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_246:
+    ret
+
+
+; [93] NS-TAG-PREFIX 
+ns_tag_prefix:
+        call save_inp
+    call _w247
+    cmp byte [FAILED], 0
+    je .alt_ok_249
+    call restore_inp
+    call save_inp
+    call _w248
+    cmp byte [FAILED], 0
+    je .alt_ok_249
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_249:
+    ret
+
+
+; [94] C-NS-LOCAL-TAG-PREFIX 
+c_ns_local_tag_prefix:
+    call save_inp
+    call _w250
+    cmp byte [FAILED], 1
+    je .seq_fail_253
+    call _w252
+    cmp byte [FAILED], 1
+    je .seq_fail_253
+    jmp .seq_ok_253
+.seq_fail_253:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_253:
+    ret
+
+
+; [95] NS-GLOBAL-TAG-PREFIX 
+ns_global_tag_prefix:
+    call save_inp
+    call _w254
+    cmp byte [FAILED], 1
+    je .seq_fail_257
+    call _w256
+    cmp byte [FAILED], 1
+    je .seq_fail_257
+    jmp .seq_ok_257
+.seq_fail_257:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_257:
+    ret
+
+
+; [96] C-NS-PROPERTIES 
+c_ns_properties:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w265
+    cmp byte [FAILED], 0
+    je .alt_ok_274
+    call restore_inp
+    call save_inp
+    call _w273
+    cmp byte [FAILED], 0
+    je .alt_ok_274
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_274:
+    ret
+
+
+; [97] C-NS-TAG-PROPERTY 
+c_ns_tag_property:
+        call save_inp
+    call _w275
+    cmp byte [FAILED], 0
+    je .alt_ok_278
+    call restore_inp
+    call save_inp
+    call _w276
+    cmp byte [FAILED], 0
+    je .alt_ok_278
+    call restore_inp
+    call save_inp
+    call _w277
+    cmp byte [FAILED], 0
+    je .alt_ok_278
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_278:
+    ret
+
+
+; [98] C-VERBATIM-TAG 
+c_verbatim_tag:
+    call save_inp
+    call _w279
+    cmp byte [FAILED], 1
+    je .seq_fail_283
+    call _w281
+    cmp byte [FAILED], 1
+    je .seq_fail_283
+    call _w282
+    cmp byte [FAILED], 1
+    je .seq_fail_283
+    jmp .seq_ok_283
+.seq_fail_283:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_283:
+    ret
+
+
+; [99] C-NS-SHORTHAND-TAG 
+c_ns_shorthand_tag:
+    call save_inp
+    call _w284
+    cmp byte [FAILED], 1
+    je .seq_fail_287
+    call _w286
+    cmp byte [FAILED], 1
+    je .seq_fail_287
+    jmp .seq_ok_287
+.seq_fail_287:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_287:
+    ret
+
+
+; [100] C-NON-SPECIFIC-TAG 
+c_non_specific_tag:
+    mov rdi, 33
+    call match_cp
+    ret
+
+
+; [101] C-NS-ANCHOR-PROPERTY 
+c_ns_anchor_property:
+    mov rdi, _str5
+    mov rsi, _w292
+    call peg_build
+    ret
+
+
+; [102] NS-ANCHOR-CHAR 
+ns_anchor_char:
+    mov rdi, _w293
+    mov rsi, _w294
+    call peg_minus
+    ret
+
+
+; [103] NS-ANCHOR-NAME 
+ns_anchor_name:
+    mov rdi, _w295
+    call peg_plus
+    ret
+
+
+; [104] C-NS-ALIAS-NODE 
+c_ns_alias_node:
+    mov rdi, _str6
+    mov rsi, _w300
+    call peg_build
+    ret
+
+
+; [105] E-SCALAR 
+e_scalar:
+    call ok_r
+    ret
+
+
+; [106] E-NODE 
+e_node:
+    call e_scalar
+    ret
+
+
+; [107] NB-DOUBLE-CHAR 
+nb_double_char:
+        call save_inp
+    call _w301
+    cmp byte [FAILED], 0
+    je .alt_ok_308
+    call restore_inp
+    call save_inp
+    call _w307
+    cmp byte [FAILED], 0
+    je .alt_ok_308
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_308:
+    ret
+
+
+; [108] NS-DOUBLE-CHAR 
+ns_double_char:
+    mov rdi, _w309
+    mov rsi, _w310
+    call peg_minus
+    ret
+
+
+; [109] C-DOUBLE-QUOTED 
+c_double_quoted:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    mov rdi, _w315
+    call peg_scalar
+    ret
+
+
+; [110] NB-DOUBLE-TEXT 
+nb_double_text:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        mov rdi, [c]
+    lea rsi, [str_flow_out]
+    call str_eq
+    test al, al
+    jz .sw_skip_316_0
+    mov rax, qword [n]
+    mov [n], rax
+    call nb_double_multi_line
+    jmp .sw_end_316
+.sw_skip_316_0:
+    mov rdi, [c]
+    lea rsi, [str_flow_in]
+    call str_eq
+    test al, al
+    jz .sw_skip_316_1
+    mov rax, qword [n]
+    mov [n], rax
+    call nb_double_multi_line
+    jmp .sw_end_316
+.sw_skip_316_1:
+    mov rdi, [c]
+    lea rsi, [str_block_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_316_2
+    call nb_double_one_line
+    jmp .sw_end_316
+.sw_skip_316_2:
+    mov rdi, [c]
+    lea rsi, [str_flow_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_316_3
+    call nb_double_one_line
+    jmp .sw_end_316
+.sw_skip_316_3:
+    call fail_no_case
+.sw_end_316:
+    ret
+
+
+; [111] NB-DOUBLE-ONE-LINE 
+nb_double_one_line:
+    mov rdi, _w317
+    call peg_star
+    ret
+
+
+; [112] S-DOUBLE-ESCAPED 
+s_double_escaped:
+    ; param n = int (in [n])
+    call save_inp
+    call _w319
+    cmp byte [FAILED], 1
+    je .seq_fail_325
+    call _w320
+    cmp byte [FAILED], 1
+    je .seq_fail_325
+    call _w321
+    cmp byte [FAILED], 1
+    je .seq_fail_325
+    call _w323
+    cmp byte [FAILED], 1
+    je .seq_fail_325
+    call _w324
+    cmp byte [FAILED], 1
+    je .seq_fail_325
+    jmp .seq_ok_325
+.seq_fail_325:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_325:
+    ret
+
+
+; [113] S-DOUBLE-BREAK 
+s_double_break:
+    ; param n = int (in [n])
+        call save_inp
+    call _w326
+    cmp byte [FAILED], 0
+    je .alt_ok_328
+    call restore_inp
+    call save_inp
+    call _w327
+    cmp byte [FAILED], 0
+    je .alt_ok_328
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_328:
+    ret
+
+
+; [114] NB-NS-DOUBLE-IN-LINE 
+nb_ns_double_in_line:
+    mov rdi, _w333
+    call peg_star
+    ret
+
+
+; [115] S-DOUBLE-NEXT-LINE 
+s_double_next_line:
+    ; param n = int (in [n])
+    call save_inp
+    call _w334
+    cmp byte [FAILED], 1
+    je .seq_fail_345
+    call _w344
+    cmp byte [FAILED], 1
+    je .seq_fail_345
+    jmp .seq_ok_345
+.seq_fail_345:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_345:
+    ret
+
+
+; [116] NB-DOUBLE-MULTI-LINE 
+nb_double_multi_line:
+    ; param n = int (in [n])
+    call save_inp
+    call _w346
+    cmp byte [FAILED], 1
+    je .seq_fail_352
+    call _w351
+    cmp byte [FAILED], 1
+    je .seq_fail_352
+    jmp .seq_ok_352
+.seq_fail_352:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_352:
+    ret
+
+
+; [117] C-QUOTED-QUOTE 
+c_quoted_quote:
+    mov rdi, _str7
+    call match_str
+    ret
+
+
+; [118] NB-SINGLE-CHAR 
+nb_single_char:
+        call save_inp
+    call _w353
+    cmp byte [FAILED], 0
+    je .alt_ok_357
+    call restore_inp
+    call save_inp
+    call _w356
+    cmp byte [FAILED], 0
+    je .alt_ok_357
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_357:
+    ret
+
+
+; [119] NS-SINGLE-CHAR 
+ns_single_char:
+    mov rdi, _w358
+    mov rsi, _w359
+    call peg_minus
+    ret
+
+
+; [120] C-SINGLE-QUOTED 
+c_single_quoted:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    mov rdi, _w364
+    call peg_scalar
+    ret
+
+
+; [121] NB-SINGLE-TEXT 
+nb_single_text:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        mov rdi, [c]
+    lea rsi, [str_flow_out]
+    call str_eq
+    test al, al
+    jz .sw_skip_365_0
+    mov rax, qword [n]
+    mov [n], rax
+    call nb_single_multi_line
+    jmp .sw_end_365
+.sw_skip_365_0:
+    mov rdi, [c]
+    lea rsi, [str_flow_in]
+    call str_eq
+    test al, al
+    jz .sw_skip_365_1
+    mov rax, qword [n]
+    mov [n], rax
+    call nb_single_multi_line
+    jmp .sw_end_365
+.sw_skip_365_1:
+    mov rdi, [c]
+    lea rsi, [str_block_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_365_2
+    call nb_single_one_line
+    jmp .sw_end_365
+.sw_skip_365_2:
+    mov rdi, [c]
+    lea rsi, [str_flow_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_365_3
+    call nb_single_one_line
+    jmp .sw_end_365
+.sw_skip_365_3:
+    call fail_no_case
+.sw_end_365:
+    ret
+
+
+; [122] NB-SINGLE-ONE-LINE 
+nb_single_one_line:
+    mov rdi, _w366
+    call peg_star
+    ret
+
+
+; [123] NS-SINGLE-IN-LINE 
+ns_single_in_line:
+    mov rdi, _w371
+    call peg_star
+    ret
+
+
+; [124] S-SINGLE-NEXT-LINE 
+s_single_next_line:
+    ; param n = int (in [n])
+    call save_inp
+    call _w372
+    cmp byte [FAILED], 1
+    je .seq_fail_383
+    call _w382
+    cmp byte [FAILED], 1
+    je .seq_fail_383
+    jmp .seq_ok_383
+.seq_fail_383:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_383:
+    ret
+
+
+; [125] NB-SINGLE-MULTI-LINE 
+nb_single_multi_line:
+    ; param n = int (in [n])
+    call save_inp
+    call _w384
+    cmp byte [FAILED], 1
+    je .seq_fail_390
+    call _w389
+    cmp byte [FAILED], 1
+    je .seq_fail_390
+    jmp .seq_ok_390
+.seq_fail_390:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_390:
+    ret
+
+
+; [126] NS-PLAIN-FIRST 
+ns_plain_first:
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w393
+    cmp byte [FAILED], 0
+    je .alt_ok_403
+    call restore_inp
+    call save_inp
+    call _w402
+    cmp byte [FAILED], 0
+    je .alt_ok_403
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_403:
+    ret
+
+
+; [127] NS-PLAIN-SAFE 
+ns_plain_safe:
+    ; param c = ctx (in [c])
+        mov rdi, [c]
+    lea rsi, [str_flow_out]
+    call str_eq
+    test al, al
+    jz .sw_skip_404_0
+    call ns_plain_safe_out
+    jmp .sw_end_404
+.sw_skip_404_0:
+    mov rdi, [c]
+    lea rsi, [str_flow_in]
+    call str_eq
+    test al, al
+    jz .sw_skip_404_1
+    call ns_plain_safe_in
+    jmp .sw_end_404
+.sw_skip_404_1:
+    mov rdi, [c]
+    lea rsi, [str_block_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_404_2
+    call ns_plain_safe_out
+    jmp .sw_end_404
+.sw_skip_404_2:
+    mov rdi, [c]
+    lea rsi, [str_flow_key]
+    call str_eq
+    test al, al
+    jz .sw_skip_404_3
+    call ns_plain_safe_in
+    jmp .sw_end_404
+.sw_skip_404_3:
+    call fail_no_case
+.sw_end_404:
+    ret
+
+
+; [128] NS-PLAIN-SAFE-OUT 
+ns_plain_safe_out:
+    call ns_char
+    ret
+
+
+; [129] NS-PLAIN-SAFE-IN 
+ns_plain_safe_in:
+    mov rdi, _w405
+    mov rsi, _w406
+    call peg_minus
+    ret
+
+
+; [130] NS-PLAIN-CHAR 
+ns_plain_char:
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w412
+    cmp byte [FAILED], 0
+    je .alt_ok_423
+    call restore_inp
+    call save_inp
+    call _w417
+    cmp byte [FAILED], 0
+    je .alt_ok_423
+    call restore_inp
+    call save_inp
+    call _w422
+    cmp byte [FAILED], 0
+    je .alt_ok_423
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_423:
+    ret
+
+
+; [131] NS-PLAIN 
+ns_plain:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    mov rdi, _w425
+    call peg_scalar
+    ret
+
+
+; [132] NB-NS-PLAIN-IN-LINE 
+nb_ns_plain_in_line:
+    ; param c = ctx (in [c])
+    mov rdi, _w430
+    call peg_star
+    ret
+
+
+; [133] NS-PLAIN-ONE-LINE 
+ns_plain_one_line:
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w431
+    cmp byte [FAILED], 1
+    je .seq_fail_433
+    call _w432
+    cmp byte [FAILED], 1
+    je .seq_fail_433
+    jmp .seq_ok_433
+.seq_fail_433:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_433:
+    ret
+
+
+; [134] S-NS-PLAIN-NEXT-LINE 
+s_ns_plain_next_line:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w434
+    cmp byte [FAILED], 1
+    je .seq_fail_439
+    call _w436
+    cmp byte [FAILED], 1
+    je .seq_fail_439
+    call _w437
+    cmp byte [FAILED], 1
+    je .seq_fail_439
+    call _w438
+    cmp byte [FAILED], 1
+    je .seq_fail_439
+    jmp .seq_ok_439
+.seq_fail_439:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_439:
+    ret
+
+
+; [135] NS-PLAIN-MULTI-LINE 
+ns_plain_multi_line:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w440
+    cmp byte [FAILED], 1
+    je .seq_fail_443
+    call _w442
+    cmp byte [FAILED], 1
+    je .seq_fail_443
+    jmp .seq_ok_443
+.seq_fail_443:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_443:
+    ret
+
+
+; [137] C-FLOW-SEQUENCE 
+c_flow_sequence:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    mov rdi, _str8
+    mov rsi, _w453
+    call peg_build
+    ret
+
+
+; [138] NS-S-FLOW-SEQ-ENTRIES 
+ns_s_flow_seq_entries:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w454
+    cmp byte [FAILED], 1
+    je .seq_fail_465
+    call _w456
+    cmp byte [FAILED], 1
+    je .seq_fail_465
+    call _w464
+    cmp byte [FAILED], 1
+    je .seq_fail_465
+    jmp .seq_ok_465
+.seq_fail_465:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_465:
+    ret
+
+
+; [139] NS-FLOW-SEQ-ENTRY 
+ns_flow_seq_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w466
+    cmp byte [FAILED], 0
+    je .alt_ok_468
+    call restore_inp
+    call save_inp
+    call _w467
+    cmp byte [FAILED], 0
+    je .alt_ok_468
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_468:
+    ret
+
+
+; [140] C-FLOW-MAPPING 
+c_flow_mapping:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    mov rdi, _str9
+    mov rsi, _w478
+    call peg_build
+    ret
+
+
+; [141] NS-S-FLOW-MAP-ENTRIES 
+ns_s_flow_map_entries:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w479
+    cmp byte [FAILED], 1
+    je .seq_fail_490
+    call _w481
+    cmp byte [FAILED], 1
+    je .seq_fail_490
+    call _w489
+    cmp byte [FAILED], 1
+    je .seq_fail_490
+    jmp .seq_ok_490
+.seq_fail_490:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_490:
+    ret
+
+
+; [142] NS-FLOW-MAP-ENTRY 
+ns_flow_map_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w495
+    cmp byte [FAILED], 0
+    je .alt_ok_497
+    call restore_inp
+    call save_inp
+    call _w496
+    cmp byte [FAILED], 0
+    je .alt_ok_497
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_497:
+    ret
+
+
+; [143] NS-FLOW-MAP-EXPLICIT-ENTRY 
+ns_flow_map_explicit_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w498
+    cmp byte [FAILED], 0
+    je .alt_ok_503
+    call restore_inp
+    call save_inp
+    call _w502
+    cmp byte [FAILED], 0
+    je .alt_ok_503
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_503:
+    ret
+
+
+; [144] NS-FLOW-MAP-IMPLICIT-ENTRY 
+ns_flow_map_implicit_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    mov rdi, _str10
+    mov rsi, _w508
+    call peg_build
+    ret
+
+
+; [145] NS-FLOW-MAP-YAML-KEY-ENTRY 
+ns_flow_map_yaml_key_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w509
+    cmp byte [FAILED], 1
+    je .seq_fail_518
+    call _w517
+    cmp byte [FAILED], 1
+    je .seq_fail_518
+    jmp .seq_ok_518
+.seq_fail_518:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_518:
+    ret
+
+
+; [146] C-NS-FLOW-MAP-EMPTY-KEY-ENTRY 
+c_ns_flow_map_empty_key_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w519
+    cmp byte [FAILED], 1
+    je .seq_fail_521
+    call _w520
+    cmp byte [FAILED], 1
+    je .seq_fail_521
+    jmp .seq_ok_521
+.seq_fail_521:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_521:
+    ret
+
+
+; [147] C-NS-FLOW-MAP-SEPARATE-VALUE 
+c_ns_flow_map_separate_value:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w522
+    cmp byte [FAILED], 1
+    je .seq_fail_532
+    call _w524
+    cmp byte [FAILED], 1
+    je .seq_fail_532
+    call _w531
+    cmp byte [FAILED], 1
+    je .seq_fail_532
+    jmp .seq_ok_532
+.seq_fail_532:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_532:
+    ret
+
+
+; [148] C-NS-FLOW-MAP-JSON-KEY-ENTRY 
+c_ns_flow_map_json_key_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w533
+    cmp byte [FAILED], 1
+    je .seq_fail_542
+    call _w541
+    cmp byte [FAILED], 1
+    je .seq_fail_542
+    jmp .seq_ok_542
+.seq_fail_542:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_542:
+    ret
+
+
+; [149] C-NS-FLOW-MAP-ADJACENT-VALUE 
+c_ns_flow_map_adjacent_value:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w543
+    cmp byte [FAILED], 1
+    je .seq_fail_552
+    call _w551
+    cmp byte [FAILED], 1
+    je .seq_fail_552
+    jmp .seq_ok_552
+.seq_fail_552:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_552:
+    ret
+
+
+; [150] NS-FLOW-PAIR 
+ns_flow_pair:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w557
+    cmp byte [FAILED], 0
+    je .alt_ok_559
+    call restore_inp
+    call save_inp
+    call _w558
+    cmp byte [FAILED], 0
+    je .alt_ok_559
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_559:
+    ret
+
+
+; [151] NS-FLOW-PAIR-ENTRY 
+ns_flow_pair_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w560
+    cmp byte [FAILED], 0
+    je .alt_ok_563
+    call restore_inp
+    call save_inp
+    call _w561
+    cmp byte [FAILED], 0
+    je .alt_ok_563
+    call restore_inp
+    call save_inp
+    call _w562
+    cmp byte [FAILED], 0
+    je .alt_ok_563
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_563:
+    ret
+
+
+; [152] NS-FLOW-PAIR-YAML-KEY-ENTRY 
+ns_flow_pair_yaml_key_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w564
+    cmp byte [FAILED], 1
+    je .seq_fail_566
+    call _w565
+    cmp byte [FAILED], 1
+    je .seq_fail_566
+    jmp .seq_ok_566
+.seq_fail_566:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_566:
+    ret
+
+
+; [153] C-NS-FLOW-PAIR-JSON-KEY-ENTRY 
+c_ns_flow_pair_json_key_entry:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w567
+    cmp byte [FAILED], 1
+    je .seq_fail_569
+    call _w568
+    cmp byte [FAILED], 1
+    je .seq_fail_569
+    jmp .seq_ok_569
+.seq_fail_569:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_569:
+    ret
+
+
+; [154] NS-S-IMPLICIT-YAML-KEY 
+ns_s_implicit_yaml_key:
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w570
+    cmp byte [FAILED], 1
+    je .seq_fail_573
+    call _w572
+    cmp byte [FAILED], 1
+    je .seq_fail_573
+    jmp .seq_ok_573
+.seq_fail_573:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_573:
+    ret
+
+
+; [155] C-S-IMPLICIT-JSON-KEY 
+c_s_implicit_json_key:
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w574
+    cmp byte [FAILED], 1
+    je .seq_fail_577
+    call _w576
+    cmp byte [FAILED], 1
+    je .seq_fail_577
+    jmp .seq_ok_577
+.seq_fail_577:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_577:
+    ret
+
+
+; [156] NS-FLOW-YAML-CONTENT 
+ns_flow_yaml_content:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    mov rax, qword [n]
+    mov [n], rax
+    mov rax, qword [c]
+    mov [c], rax
+    call ns_plain
+    ret
+
+
+; [157] C-FLOW-JSON-CONTENT 
+c_flow_json_content:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w578
+    cmp byte [FAILED], 0
+    je .alt_ok_582
+    call restore_inp
+    call save_inp
+    call _w579
+    cmp byte [FAILED], 0
+    je .alt_ok_582
+    call restore_inp
+    call save_inp
+    call _w580
+    cmp byte [FAILED], 0
+    je .alt_ok_582
+    call restore_inp
+    call save_inp
+    call _w581
+    cmp byte [FAILED], 0
+    je .alt_ok_582
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_582:
+    ret
+
+
+; [158] NS-FLOW-CONTENT 
+ns_flow_content:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w583
+    cmp byte [FAILED], 0
+    je .alt_ok_585
+    call restore_inp
+    call save_inp
+    call _w584
+    cmp byte [FAILED], 0
+    je .alt_ok_585
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_585:
+    ret
+
+
+; [159] NS-FLOW-YAML-NODE 
+ns_flow_yaml_node:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w586
+    cmp byte [FAILED], 0
+    je .alt_ok_598
+    call restore_inp
+    call save_inp
+    call _w587
+    cmp byte [FAILED], 0
+    je .alt_ok_598
+    call restore_inp
+    call save_inp
+    call _w597
+    cmp byte [FAILED], 0
+    je .alt_ok_598
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_598:
+    ret
+
+
+; [160] C-FLOW-JSON-NODE 
+c_flow_json_node:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w603
+    cmp byte [FAILED], 1
+    je .seq_fail_605
+    call _w604
+    cmp byte [FAILED], 1
+    je .seq_fail_605
+    jmp .seq_ok_605
+.seq_fail_605:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_605:
+    ret
+
+
+; [161] NS-FLOW-NODE 
+ns_flow_node:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w606
+    cmp byte [FAILED], 0
+    je .alt_ok_618
+    call restore_inp
+    call save_inp
+    call _w607
+    cmp byte [FAILED], 0
+    je .alt_ok_618
+    call restore_inp
+    call save_inp
+    call _w617
+    cmp byte [FAILED], 0
+    je .alt_ok_618
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_618:
+    ret
+
+
+; [162] C-B-BLOCK-HEADER 
+c_b_block_header:
+    ; param n = int (in [n])
+        call save_inp
+    call _w631
+    cmp byte [FAILED], 0
+    je .alt_ok_645
+    call restore_inp
+    call save_inp
+    call _w644
+    cmp byte [FAILED], 0
+    je .alt_ok_645
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_645:
+    ret
+
+
+; [163] C-INDENTATION-INDICATOR 
+c_indentation_indicator:
+    ; param n = int (in [n])
+        call save_inp
+    call _w646
+    cmp byte [FAILED], 0
+    je .alt_ok_648
+    call restore_inp
+    call save_inp
+    call _w647
+    cmp byte [FAILED], 0
+    je .alt_ok_648
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_648:
+    ret
+
+
+; [164] C-CHOMPING-INDICATOR 
+c_chomping_indicator:
+        call save_inp
+    call _w649
+    cmp byte [FAILED], 0
+    je .alt_ok_652
+    call restore_inp
+    call save_inp
+    call _w650
+    cmp byte [FAILED], 0
+    je .alt_ok_652
+    call restore_inp
+    call save_inp
+    call _w651
+    cmp byte [FAILED], 0
+    je .alt_ok_652
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_652:
+    ret
+
+
+; [165] B-CHOMPED-LAST 
+b_chomped_last:
+    ; param t = ctx (in [t])
+        mov rdi, [t]
+    lea rsi, [str_strip]
+    call str_eq
+    test al, al
+    jz .sw_skip_653_0
+    call b_non_content
+    jmp .sw_end_653
+.sw_skip_653_0:
+    mov rdi, [t]
+    lea rsi, [str_clip]
+    call str_eq
+    test al, al
+    jz .sw_skip_653_1
+    call b_as_line_feed
+    jmp .sw_end_653
+.sw_skip_653_1:
+    mov rdi, [t]
+    lea rsi, [str_keep]
+    call str_eq
+    test al, al
+    jz .sw_skip_653_2
+    call b_as_line_feed
+    jmp .sw_end_653
+.sw_skip_653_2:
+    call fail_no_case
+.sw_end_653:
+    ret
+
+
+; [166] L-CHOMPED-EMPTY 
+l_chomped_empty:
+    ; param n = int (in [n])
+    ; param t = ctx (in [t])
+        mov rdi, [t]
+    lea rsi, [str_strip]
+    call str_eq
+    test al, al
+    jz .sw_skip_654_0
+    mov rax, qword [n]
+    mov [n], rax
+    call l_strip_empty
+    jmp .sw_end_654
+.sw_skip_654_0:
+    mov rdi, [t]
+    lea rsi, [str_clip]
+    call str_eq
+    test al, al
+    jz .sw_skip_654_1
+    mov rax, qword [n]
+    mov [n], rax
+    call l_strip_empty
+    jmp .sw_end_654
+.sw_skip_654_1:
+    mov rdi, [t]
+    lea rsi, [str_keep]
+    call str_eq
+    test al, al
+    jz .sw_skip_654_2
+    mov rax, qword [n]
+    mov [n], rax
+    call l_keep_empty
+    jmp .sw_end_654
+.sw_skip_654_2:
+    call fail_no_case
+.sw_end_654:
+    ret
+
+
+; [167] L-STRIP-EMPTY 
+l_strip_empty:
+    ; param n = int (in [n])
+    call save_inp
+    call _w659
+    cmp byte [FAILED], 1
+    je .seq_fail_662
+    call _w661
+    cmp byte [FAILED], 1
+    je .seq_fail_662
+    jmp .seq_ok_662
+.seq_fail_662:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_662:
+    ret
+
+
+; [168] L-KEEP-EMPTY 
+l_keep_empty:
+    ; param n = int (in [n])
+    call save_inp
+    call _w664
+    cmp byte [FAILED], 1
+    je .seq_fail_667
+    call _w666
+    cmp byte [FAILED], 1
+    je .seq_fail_667
+    jmp .seq_ok_667
+.seq_fail_667:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_667:
+    ret
+
+
+; [169] L-TRAIL-COMMENTS 
+l_trail_comments:
+    ; param n = int (in [n])
+    call save_inp
+    call _w668
+    cmp byte [FAILED], 1
+    je .seq_fail_673
+    call _w669
+    cmp byte [FAILED], 1
+    je .seq_fail_673
+    call _w670
+    cmp byte [FAILED], 1
+    je .seq_fail_673
+    call _w672
+    cmp byte [FAILED], 1
+    je .seq_fail_673
+    jmp .seq_ok_673
+.seq_fail_673:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_673:
+    ret
+
+
+; [170] C-L+LITERAL 
+c_lliteral:
+    ; param n = int (in [n])
+    call save_inp
+    call _w674
+    cmp byte [FAILED], 1
+    je .seq_fail_692
+    call _w691
+    cmp byte [FAILED], 1
+    je .seq_fail_692
+    jmp .seq_ok_692
+.seq_fail_692:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_692:
+    ret
+
+
+; [171] L-NB-LITERAL-TEXT 
+l_nb_literal_text:
+    ; param n = int (in [n])
+    call save_inp
+    call _w694
+    cmp byte [FAILED], 1
+    je .seq_fail_698
+    call _w695
+    cmp byte [FAILED], 1
+    je .seq_fail_698
+    call _w697
+    cmp byte [FAILED], 1
+    je .seq_fail_698
+    jmp .seq_ok_698
+.seq_fail_698:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_698:
+    ret
+
+
+; [172] B-NB-LITERAL-NEXT 
+b_nb_literal_next:
+    ; param n = int (in [n])
+    call save_inp
+    call _w699
+    cmp byte [FAILED], 1
+    je .seq_fail_701
+    call _w700
+    cmp byte [FAILED], 1
+    je .seq_fail_701
+    jmp .seq_ok_701
+.seq_fail_701:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_701:
+    ret
+
+
+; [173] L-LITERAL-CONTENT 
+l_literal_content:
+    ; param n = int (in [n])
+    ; param t = ctx (in [t])
+    mov rdi, _w711
+    call peg_scalar
+    ret
+
+
+; [174] C-L+FOLDED 
+c_lfolded:
+    ; param n = int (in [n])
+    call save_inp
+    call _w712
+    cmp byte [FAILED], 1
+    je .seq_fail_730
+    call _w729
+    cmp byte [FAILED], 1
+    je .seq_fail_730
+    jmp .seq_ok_730
+.seq_fail_730:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_730:
+    ret
+
+
+; [175] S-NB-FOLDED-TEXT 
+s_nb_folded_text:
+    ; param n = int (in [n])
+    call save_inp
+    call _w731
+    cmp byte [FAILED], 1
+    je .seq_fail_735
+    call _w732
+    cmp byte [FAILED], 1
+    je .seq_fail_735
+    call _w734
+    cmp byte [FAILED], 1
+    je .seq_fail_735
+    jmp .seq_ok_735
+.seq_fail_735:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_735:
+    ret
+
+
+; [176] L-NB-FOLDED-LINES 
+l_nb_folded_lines:
+    ; param n = int (in [n])
+    call save_inp
+    call _w736
+    cmp byte [FAILED], 1
+    je .seq_fail_742
+    call _w741
+    cmp byte [FAILED], 1
+    je .seq_fail_742
+    jmp .seq_ok_742
+.seq_fail_742:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_742:
+    ret
+
+
+; [177] S-NB-SPACED-TEXT 
+s_nb_spaced_text:
+    ; param n = int (in [n])
+    call save_inp
+    call _w743
+    cmp byte [FAILED], 1
+    je .seq_fail_747
+    call _w744
+    cmp byte [FAILED], 1
+    je .seq_fail_747
+    call _w746
+    cmp byte [FAILED], 1
+    je .seq_fail_747
+    jmp .seq_ok_747
+.seq_fail_747:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_747:
+    ret
+
+
+; [178] B-L-SPACED 
+b_l_spaced:
+    ; param n = int (in [n])
+    call save_inp
+    call _w748
+    cmp byte [FAILED], 1
+    je .seq_fail_751
+    call _w750
+    cmp byte [FAILED], 1
+    je .seq_fail_751
+    jmp .seq_ok_751
+.seq_fail_751:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_751:
+    ret
+
+
+; [179] L-NB-SPACED-LINES 
+l_nb_spaced_lines:
+    ; param n = int (in [n])
+    call save_inp
+    call _w752
+    cmp byte [FAILED], 1
+    je .seq_fail_758
+    call _w757
+    cmp byte [FAILED], 1
+    je .seq_fail_758
+    jmp .seq_ok_758
+.seq_fail_758:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_758:
+    ret
+
+
+; [180] L-NB-SAME-LINES 
+l_nb_same_lines:
+    ; param n = int (in [n])
+    call save_inp
+    call _w760
+    cmp byte [FAILED], 1
+    je .seq_fail_765
+    call _w764
+    cmp byte [FAILED], 1
+    je .seq_fail_765
+    jmp .seq_ok_765
+.seq_fail_765:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_765:
+    ret
+
+
+; [181] L-NB-DIFF-LINES 
+l_nb_diff_lines:
+    ; param n = int (in [n])
+    call save_inp
+    call _w766
+    cmp byte [FAILED], 1
+    je .seq_fail_772
+    call _w771
+    cmp byte [FAILED], 1
+    je .seq_fail_772
+    jmp .seq_ok_772
+.seq_fail_772:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_772:
+    ret
+
+
+; [182] L-FOLDED-CONTENT 
+l_folded_content:
+    ; param n = int (in [n])
+    ; param t = ctx (in [t])
+    mov rdi, _w780
+    call peg_scalar
+    ret
+
+
+; [183] L+BLOCK-SEQUENCE 
+lblock_sequence:
+    ; param n = int (in [n])
+    mov rdi, _str8
+    mov rsi, _w789
+    call peg_build
+    ret
+
+
+; [184] C-L-BLOCK-SEQ-ENTRY 
+c_l_block_seq_entry:
+    ; param n = int (in [n])
+    call save_inp
+    call _w790
+    cmp byte [FAILED], 1
+    je .seq_fail_794
+    call _w792
+    cmp byte [FAILED], 1
+    je .seq_fail_794
+    call _w793
+    cmp byte [FAILED], 1
+    je .seq_fail_794
+    jmp .seq_ok_794
+.seq_fail_794:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_794:
+    ret
+
+
+; [185] S-L+BLOCK-INDENTED 
+s_lblock_indented:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w804
+    cmp byte [FAILED], 0
+    je .alt_ok_810
+    call restore_inp
+    call save_inp
+    call _w805
+    cmp byte [FAILED], 0
+    je .alt_ok_810
+    call restore_inp
+    call save_inp
+    call _w809
+    cmp byte [FAILED], 0
+    je .alt_ok_810
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_810:
+    ret
+
+
+; [186] NS-L-COMPACT-SEQUENCE 
+ns_l_compact_sequence:
+    ; param n = int (in [n])
+    call save_inp
+    call _w811
+    cmp byte [FAILED], 1
+    je .seq_fail_817
+    call _w816
+    cmp byte [FAILED], 1
+    je .seq_fail_817
+    jmp .seq_ok_817
+.seq_fail_817:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_817:
+    ret
+
+
+; [187] L+BLOCK-MAPPING 
+lblock_mapping:
+    ; param n = int (in [n])
+    mov rdi, _str9
+    mov rsi, _w826
+    call peg_build
+    ret
+
+
+; [188] NS-L-BLOCK-MAP-ENTRY 
+ns_l_block_map_entry:
+    ; param n = int (in [n])
+        call save_inp
+    call _w827
+    cmp byte [FAILED], 0
+    je .alt_ok_829
+    call restore_inp
+    call save_inp
+    call _w828
+    cmp byte [FAILED], 0
+    je .alt_ok_829
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_829:
+    ret
+
+
+; [189] C-L-BLOCK-MAP-EXPLICIT-ENTRY 
+c_l_block_map_explicit_entry:
+    ; param n = int (in [n])
+    call save_inp
+    call _w830
+    cmp byte [FAILED], 1
+    je .seq_fail_835
+    call _w834
+    cmp byte [FAILED], 1
+    je .seq_fail_835
+    jmp .seq_ok_835
+.seq_fail_835:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_835:
+    ret
+
+
+; [190] C-L-BLOCK-MAP-EXPLICIT-KEY 
+c_l_block_map_explicit_key:
+    ; param n = int (in [n])
+    call save_inp
+    call _w836
+    cmp byte [FAILED], 1
+    je .seq_fail_838
+    call _w837
+    cmp byte [FAILED], 1
+    je .seq_fail_838
+    jmp .seq_ok_838
+.seq_fail_838:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_838:
+    ret
+
+
+; [191] L-BLOCK-MAP-EXPLICIT-VALUE 
+l_block_map_explicit_value:
+    ; param n = int (in [n])
+    call save_inp
+    call _w839
+    cmp byte [FAILED], 1
+    je .seq_fail_842
+    call _w840
+    cmp byte [FAILED], 1
+    je .seq_fail_842
+    call _w841
+    cmp byte [FAILED], 1
+    je .seq_fail_842
+    jmp .seq_ok_842
+.seq_fail_842:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_842:
+    ret
+
+
+; [192] NS-L-BLOCK-MAP-IMPLICIT-ENTRY 
+ns_l_block_map_implicit_entry:
+    ; param n = int (in [n])
+    mov rdi, _str10
+    mov rsi, _w850
+    call peg_build
+    ret
+
+
+; [193] NS-S-BLOCK-MAP-IMPLICIT-KEY 
+ns_s_block_map_implicit_key:
+        call save_inp
+    call _w851
+    cmp byte [FAILED], 0
+    je .alt_ok_853
+    call restore_inp
+    call save_inp
+    call _w852
+    cmp byte [FAILED], 0
+    je .alt_ok_853
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_853:
+    ret
+
+
+; [194] C-L-BLOCK-MAP-IMPLICIT-VALUE 
+c_l_block_map_implicit_value:
+    ; param n = int (in [n])
+    call save_inp
+    call _w854
+    cmp byte [FAILED], 1
+    je .seq_fail_863
+    call _w862
+    cmp byte [FAILED], 1
+    je .seq_fail_863
+    jmp .seq_ok_863
+.seq_fail_863:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_863:
+    ret
+
+
+; [195] NS-L-COMPACT-MAPPING 
+ns_l_compact_mapping:
+    ; param n = int (in [n])
+    call save_inp
+    call _w864
+    cmp byte [FAILED], 1
+    je .seq_fail_870
+    call _w869
+    cmp byte [FAILED], 1
+    je .seq_fail_870
+    jmp .seq_ok_870
+.seq_fail_870:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_870:
+    ret
+
+
+; [196] S-L+BLOCK-NODE 
+s_lblock_node:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w871
+    cmp byte [FAILED], 0
+    je .alt_ok_873
+    call restore_inp
+    call save_inp
+    call _w872
+    cmp byte [FAILED], 0
+    je .alt_ok_873
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_873:
+    ret
+
+
+; [197] S-L+FLOW-IN-BLOCK 
+s_lflow_in_block:
+    ; param n = int (in [n])
+    call save_inp
+    call _w875
+    cmp byte [FAILED], 1
+    je .seq_fail_879
+    call _w877
+    cmp byte [FAILED], 1
+    je .seq_fail_879
+    call _w878
+    cmp byte [FAILED], 1
+    je .seq_fail_879
+    jmp .seq_ok_879
+.seq_fail_879:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_879:
+    ret
+
+
+; [198] S-L+BLOCK-IN-BLOCK 
+s_lblock_in_block:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+        call save_inp
+    call _w880
+    cmp byte [FAILED], 0
+    je .alt_ok_882
+    call restore_inp
+    call save_inp
+    call _w881
+    cmp byte [FAILED], 0
+    je .alt_ok_882
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_882:
+    ret
+
+
+; [199] S-L+BLOCK-SCALAR 
+s_lblock_scalar:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w884
+    cmp byte [FAILED], 1
+    je .seq_fail_896
+    call _w891
+    cmp byte [FAILED], 1
+    je .seq_fail_896
+    call _w895
+    cmp byte [FAILED], 1
+    je .seq_fail_896
+    jmp .seq_ok_896
+.seq_fail_896:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_896:
+    ret
+
+
+; [200] S-L+BLOCK-COLLECTION 
+s_lblock_collection:
+    ; param n = int (in [n])
+    ; param c = ctx (in [c])
+    call save_inp
+    call _w903
+    cmp byte [FAILED], 1
+    je .seq_fail_910
+    call _w904
+    cmp byte [FAILED], 1
+    je .seq_fail_910
+    call _w909
+    cmp byte [FAILED], 1
+    je .seq_fail_910
+    jmp .seq_ok_910
+.seq_fail_910:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_910:
+    ret
+
+
+; [202] L-DOCUMENT-PREFIX 
+l_document_prefix:
+    call save_inp
+    call _w912
+    cmp byte [FAILED], 1
+    je .seq_fail_915
+    call _w914
+    cmp byte [FAILED], 1
+    je .seq_fail_915
+    jmp .seq_ok_915
+.seq_fail_915:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_915:
+    ret
+
+
+; [203] C-DIRECTIVES-END 
+c_directives_end:
+    mov rdi, _str14
+    call match_str
+    ret
+
+
+; [204] C-DOCUMENT-END 
+c_document_end:
+    mov rdi, _str15
+    call match_str
+    ret
+
+
+; [205] L-DOCUMENT-SUFFIX 
+l_document_suffix:
+    call save_inp
+    call _w916
+    cmp byte [FAILED], 1
+    je .seq_fail_918
+    call _w917
+    cmp byte [FAILED], 1
+    je .seq_fail_918
+    jmp .seq_ok_918
+.seq_fail_918:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_918:
+    ret
+
+
+; [206] C-FORBIDDEN 
+c_forbidden:
+    call save_inp
+    call _w919
+    cmp byte [FAILED], 1
+    je .seq_fail_929
+    call _w923
+    cmp byte [FAILED], 1
+    je .seq_fail_929
+    call _w928
+    cmp byte [FAILED], 1
+    je .seq_fail_929
+    jmp .seq_ok_929
+.seq_fail_929:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_929:
+    ret
+
+
+; [207] L-BARE-DOCUMENT 
+l_bare_document:
+    mov rdi, _str16
+    mov rsi, _w930
+    call peg_build
+    ret
+
+
+; [208] L-EXPLICIT-DOCUMENT 
+l_explicit_document:
+    mov rdi, _str16
+    mov rsi, _w940
+    call peg_build
+    ret
+
+
+; [209] L-DIRECTIVE-DOCUMENT 
+l_directive_document:
+    call save_inp
+    call _w942
+    cmp byte [FAILED], 1
+    je .seq_fail_944
+    call _w943
+    cmp byte [FAILED], 1
+    je .seq_fail_944
+    jmp .seq_ok_944
+.seq_fail_944:
+    call restore_inp
+    mov byte [FAILED], 1
+.seq_ok_944:
+    ret
+
+
+; [210] L-ANY-DOCUMENT 
+l_any_document:
+        call save_inp
+    call _w945
+    cmp byte [FAILED], 0
+    je .alt_ok_948
+    call restore_inp
+    call save_inp
+    call _w946
+    cmp byte [FAILED], 0
+    je .alt_ok_948
+    call restore_inp
+    call save_inp
+    call _w947
+    cmp byte [FAILED], 0
+    je .alt_ok_948
+    call restore_inp
+    mov byte [FAILED], 1
+.alt_ok_948:
+    ret
+
+
+; [211] L-YAML-STREAM 
+l_yaml_stream:
+    mov rdi, _str17
+    mov rsi, _w971
+    call peg_build
+    ret
+
+
+
+
