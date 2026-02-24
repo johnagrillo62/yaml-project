@@ -1,4 +1,4 @@
-# yaml-grammar
+# The Yaml Project
 
 Cloud infrastructure runs on YAML. Kubernetes, CI/CD pipelines,
 infrastructure-as-code — all depend on YAML parsers that behave
