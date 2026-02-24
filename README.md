@@ -288,7 +288,7 @@ construction — because they *are* the spec.
 
 ## Author
 
-John Grillo — full-time C++ programmer, 20 years of metaprogramming.
+John Grillo — full-time C++ programmer, with 20 years of metaprogramming.
 
 More languages soon.
 
