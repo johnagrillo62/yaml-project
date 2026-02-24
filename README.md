@@ -50,8 +50,6 @@ around since 2004. The YAML spec has been formal since 2009. These
 ideas existed in separate domains — programming language theory,
 parsing research, and data serialization. This project connects them.
 
-AI didn't invent anything here. It was the tool that made the assembly practical — iterating on 211 rules across eighteen languages is tedious work. But the architecture has been possible since the '70s.
-
 Because the projector executes the grammar directly, errors in the spec itself become visible. This process uncovered a bug in [Rule 78 of the YAML 1.2 specification](https://github.com/yaml/yaml-spec/issues/356) — and its implications across dependent rules. Hand-written parsers can silently work around spec errors without ever noticing them. A projector cannot — it does exactly what the spec says, which means spec bugs have nowhere to hide.
 
 When a spec error is found or the grammar is updated, all parsers are regenerated at once. One fix, every language, in seconds. If features are added to YAML, the grammar is updated and every parser is regenerated — no per-language maintenance required. If an entirely new format is needed — such as a safe subset of YAML — a new grammar can be written and all parsers generated from scratch.
@@ -102,9 +100,9 @@ This means every projected parser is structurally identical to the spec. If the 
 
 **How new languages are added**
 
-Each target language needs a *target spec* — 300–500 lines that tells the projector how the language expresses functions, closures, sequences, alternatives, and pattern matching. This is the only hand-written part, and AI can create it.
+Each target language needs a *target spec* — 300–500 lines that tells the projector how the language expresses functions, closures, sequences, alternatives, and pattern matching. This is the only hand-written part.
 
-Given an existing target spec as a reference, AI can produce a new spec for any language in a single conversation. The projector then generates the complete parser — 1500–8500 lines — in seconds. The output is deterministic: the same grammar and target spec always produce the same parser.
+Given an existing target spec as a reference, a new spec for any language can be produced quickly. The projector then generates the complete parser — 1500–8500 lines — in seconds. The output is deterministic: the same grammar and target spec always produce the same parser.
 
 The target spec is small enough to audit by hand. The projected output is verifiable against the YAML Test Suite. The grammar is readable and corresponds 1:1 with the YAML 1.2 specification.
 
@@ -195,37 +193,36 @@ test suite, and reports the score.
 
 Most YAML libraries don't fully implement the 1.2 spec. Many fail on edge cases around block scalars, chomping indicators, multi-line plain scalars, flow collections, and directive handling. These parsers are generated directly from the formal grammar — they handle the full spec by construction.
 
-## The future: AI should build atoms, not code
+## The future: atoms, not code
 
-The traditional approach to AI-assisted programming is to generate code. The problem is that generated code is dead on arrival — the moment the spec changes, the requirements shift, or you want to add error messages, you regenerate and lose everything, or you hand-edit and lose the ability to regenerate.
+The traditional approach to code generation is to produce code directly. The problem is that generated code is dead on arrival — the moment the spec changes, the requirements shift, or you want to add error messages, you regenerate and lose everything, or you hand-edit and lose the ability to regenerate.
 
-The future of AI is not generating code. It is building **atoms** — the small, composable, auditable specifications that projectors use to generate code. A target spec is an atom. The grammar is an atom. The concern layer that adds error messages is an atom.
+The better approach is building **atoms** — the small, composable, auditable specifications that projectors use to generate code. A target spec is an atom. The grammar is an atom. The concern layer that adds error messages is an atom.
 
 This project illustrates the concept:
 
 - **Spec changes?** Update the grammar atom, regenerate all 18 parsers in seconds.
 - **Better error messages?** Update the concern atom, regenerate.
-- **New language?** AI writes a 300–500-line target spec atom, the projector does the rest.
+- **New language?** Write a 300–500-line target spec atom, the projector does the rest.
 - **New format entirely?** Write a new grammar atom, reuse every target spec.
 
-AI should not be writing 2,000-line parsers. AI should be writing 300–500-line atoms that a projector expands into 2,000-line parsers. The atoms are small enough to audit, version, and understand. The generated output is verified by test suites, not by reading code.
+Nobody should be writing 2,000-line parsers by hand. Write 300–500-line atoms that a projector expands into 2,000-line parsers. The atoms are small enough to audit, version, and understand. The generated output is verified by test suites, not by reading code.
 
-When AI builds atoms instead of code, nothing is thrown away. Every regeneration is faithful to every atom. The code is always in sync with the spec. This is how we should be building software.
+When you build atoms instead of code, nothing is thrown away. Every regeneration is faithful to every atom. The code is always in sync with the spec. This is how we should be building software.
 
 This idea is not new. John McCarthy saw it in 1958 when he created Lisp — code and data in the same domain. Futamura formalized it in 1971. This project is a practical proof that they were right.
 
 ## Author
 
-Claude, directed by John Grillo
+John Grillo
 
-John Grillo is a full-time C++ programmer whose hobby over the last
-20 years has been metaprogramming — always wanting something better,
-always searching for the next level of code generation. He finally
-reached the end of the road with a Futamura projector, built with AI.
+Full-time C++ programmer whose hobby over the last 20 years has been
+metaprogramming — always wanting something better, always searching
+for the next level of code generation. He finally reached the end of
+the road with a Futamura projector.
 
 More languages soon.
 
 ## License
 
 MIT
-
