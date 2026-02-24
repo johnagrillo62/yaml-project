@@ -40,8 +40,7 @@ they had code-as-data staring them in the face.
 
 But Haskell isn't code-as-data. You can't walk Haskell source as a
 data structure. You can't destructure a Haskell production into its
-parts and emit it in Go. So for 16 years, every implementer in every
-language went off and hand-wrote their own parser from scratch.
+parts and emit it in Go. 
 
 I put the grammar in Lisp. Then it was just a `dolist`.
 
