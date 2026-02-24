@@ -6,6 +6,7 @@
 
 (def-tgt "target-name" "PowerShell")
 (def-tgt "default-output" "yaml_reader.ps1")
+(def-tgt "call-style" "powershell")
 
 (def-tgt "keywords"
   '("begin" "break" "catch" "class" "continue" "data" "define" "do"
@@ -14,6 +15,10 @@
     "parallel" "param" "process" "return" "sequence" "switch" "throw"
     "trap" "try" "until" "using" "var" "while" "workflow"))
 (def-tgt "keyword-prefix" "r_")
+
+;;; ── Combinator overrides ──
+
+(def-tgt "comb-star" "peg_star")
 
 ;;; ── Closure wrapping ──
 
@@ -38,14 +43,20 @@
     (format nil "peg_alt $inp @(~{~A~^, ~})" wrapped-fns)))
 
 ;;; ── Switch ──
+;;; PowerShell if/elseif is a statement, not an expression.
+;;; Wrap in & { ... } so the whole thing becomes an expression
+;;; that can sit inside return (...).
 
 (def-tgt "switch-emit"
   (lambda (param cases)
     (with-output-to-string (s)
-      (format s "switch (~A) {~%" param)
+      (format s "& { ")
       (loop for (val body) in cases
-            do (format s "        ~S { ~A }~%" val body))
-      (format s "        default { fail $inp \"no case\" }~%    }"))))
+            for first = t then nil
+            do (if first
+                   (format s "if ($~A -eq ~S) { return (~A) }~%" param val body)
+                   (format s "        elseif ($~A -eq ~S) { return (~A) }~%" param val body)))
+      (format s "        else { return (fail $inp \"no case\") } }"))))
 
 ;;; ── Let ──
 

@@ -52,6 +52,10 @@
        (if args
            (format nil "~A(~{~A~^, ~})" fn args)
            (format nil "~A()" fn)))
+      ((and style (string= style "powershell"))
+       (if args
+           (format nil "~A $~A ~{~A~^ ~}" fn iv args)
+           (format nil "~A $~A" fn iv)))
       (t
        (if args
            (format nil "~A(~A, ~{~A~^, ~})" fn iv args)
@@ -74,6 +78,10 @@
        (if args
            (format nil "~A(~{~A~^, ~})" fn args)
            (format nil "~A()" fn)))
+      ((and style (string= style "powershell"))
+       (if args
+           (format nil "~A $~A ~{~A~^ ~}" fn iv args)
+           (format nil "~A $~A" fn iv)))
       (t
        (if args
            (format nil "~A(~A, ~{~A~^, ~})" fn iv args)
@@ -84,6 +92,10 @@
   (let ((style (tgt "call-style")))
     (cond
       ((and style (string= style "haskell"))
+       (if args
+           (format nil "(~A ~{~A~^ ~})" fn args)
+           fn))
+      ((and style (string= style "powershell"))
        (if args
            (format nil "(~A ~{~A~^ ~})" fn args)
            fn))
@@ -502,3 +514,4 @@
       (format t "; Projecting ~D rules~%" (hash-table-count (gram-rules gram)))
       (emit-peg gram out)
       (format t "; Done. ~A written.~%" out))))
+
