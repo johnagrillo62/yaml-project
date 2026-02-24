@@ -2,7 +2,7 @@
 
 I spent 20 years chasing metaprogramming. Always wanting something
 better, always searching for the next level of code generation.
-This is where I ended up: a Futamura projector that generates
+This is where I ended up: a Futamura like projector that generates
 YAML 1.2 parsers from a single grammar.
 
 One grammar. Eighteen languages. 308/308 tests. All of them.
