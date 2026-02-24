@@ -66,6 +66,20 @@ grammar        ─┐
 target-spec    ─┘
 ```
 
+The projector's core loop is this:
+
+```lisp
+(dolist (cr compiled-rules)
+  (destructuring-bind (num name sig body-str) cr
+    (emitf "~A [~D] ~A ~A~%" cmt num name cmte)
+    (emit-block (funcall (tgt "fn-body") sig body-str))
+    (blank)))
+```
+
+Walk the compiled rules. Destructure each one. Emit a function
+using the target spec's template. That loop produced 45,557 lines
+of working parser code across 18 languages.
+
 ## Futamura projection
 
 In 1971, Yoshihiko Futamura described how partially evaluating an interpreter with respect to a program produces a compiled version of that program. This project is a practical implementation of that idea: the grammar is the program, the PEG combinator framework is the interpreter, and the projector specializes one against the other to produce standalone parsers.
