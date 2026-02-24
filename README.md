@@ -160,7 +160,7 @@ Tested against the [YAML Test Suite](https://github.com/yaml/yaml-test-suite) (d
 All parsers pass **308/308 valid tests** (100%). The x86-64 assembly
 target passes 94/402 (experimental).
 
-The 95 error tests check for semantic constraints — things like duplicate keys, invalid tag usage, and context-dependent restrictions that go beyond the grammar. These are not structural parsing errors that the grammar can catch; they require a separate semantic validation layer. The projected parsers handle the structural parsing defined by the spec. Semantic validation is handled by the concern layer, which is a separate projection phase.
+The 94 error tests check for semantic constraints — things like duplicate keys, invalid tag usage, and context-dependent restrictions that go beyond the grammar. These are not structural parsing errors that the grammar can catch; they require a separate semantic validation layer. The projected parsers handle the structural parsing defined by the spec. Semantic validation is handled by the concern layer, which is a separate projection phase.
 
 The build and test scripts themselves are also projected — generated from `build-spec.scm`, a declarative specification that defines each target's compiler, interpreter, dependencies, and test configuration. One spec, 18 build scripts.
 

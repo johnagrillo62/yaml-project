@@ -103,6 +103,8 @@ do_test() {
   echo " Ocaml: $pass / $total passed  ($fail failed)  ${elapsed}${unit}"
   echo "════════════════════════════════════════════════════"
   echo 
+  echo 'Note: 94 of the 402 tests are for semantic analysis (duplicate keys, invalid tags, etc.) which require a separate concern layer beyond the structural parser.'
+  echo 
 }
 
 case "${1:-}" in

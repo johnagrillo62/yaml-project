@@ -30,7 +30,7 @@ do_check() {
     echo "  ✓ pwsh $(pwsh --version 2>&1 | head -1)"
   else
     echo '  ✗ pwsh not found'
-    echo '    Install: install pwsh for your platform'
+    echo '    Install: https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell'
     fail=1
   fi
   if [ -f gen/peg_yaml.ps1 ]; then
@@ -95,6 +95,8 @@ do_test() {
   echo "════════════════════════════════════════════════════"
   echo " Powershell: $pass / $total passed  ($fail failed)  ${elapsed}${unit}"
   echo "════════════════════════════════════════════════════"
+  echo 
+  echo 'Note: 94 of the 402 tests are for semantic analysis (duplicate keys, invalid tags, etc.) which require a separate concern layer beyond the structural parser.'
   echo 
 }
 

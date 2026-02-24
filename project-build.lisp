@@ -52,6 +52,7 @@
     ("lua"      . "apt install lua5.4  OR  brew install lua")
     ("bash"     . "pre-installed on most systems")
     ("escript"  . "apt install erlang  OR  brew install erlang")
+    ("pwsh"     . "https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell")
     ("go"       . "https://go.dev/dl/")
     ("rustc"    . "curl -sSf https://sh.rustup.rs | sh")
     ("g++"      . "apt install g++  OR  xcode-select --install")
@@ -67,7 +68,8 @@
     ("ocamlopt" . "https://ocaml.org/install")
     ("clang"    . "apt install clang  OR  xcode-select --install")
     ("nasm"     . "apt install nasm  OR  brew install nasm")
-    ("ld"       . "apt install binutils")))
+    ("ld"       . "apt install binutils")
+    ("gnustep-config" . "apt install gnustep-devel  OR  brew install gnustep")))
 
 (defun hint (dep)
   (or (cdr (assoc dep *hints* :test #'string=))
@@ -158,7 +160,7 @@
      (echo "'  ✓ Build complete'")
      (echo "")))
 
-(defun build-do-test (runner ts name slow timeout pipe)
+(defun build-do-test (runner ts name slow timeout pipe test-note)
   (let ((to (or timeout "1")))
     (let ((run-ok (if pipe
                       (format nil "cat \"$sd/in.yaml\" | timeout ~A ~A" to runner)
@@ -205,7 +207,10 @@
      (echo "\"════════════════════════════════════════════════════\"")
      (echo ,(format nil "\" ~A: $pass / $total passed  ($fail failed)  ${elapsed}${unit}\"" (cn name)))
      (echo "\"════════════════════════════════════════════════════\"")
-     (echo "")))))
+     (echo "")
+     ,@(when test-note
+         `((echo ,(format nil "'~A'" test-note))
+           (echo "")))))))
 
 (defun build-dispatch (name comp)
   `(case "\"${1:-}\""
@@ -249,6 +254,7 @@
          (slow   (prop1 'slow props))
          (to     (prop1 'timeout props))
          (pipe   (prop1 'pipe-input props))
+         (tnote  (prop1 'test-note body))
          (ts     (or (prop1 'test-suite body) "yaml-test-suite"))
          (gd     (or (prop1 'gen-dir body) "gen"))
          (bd     (or (prop1 'bin-dir body) "bin"))
@@ -269,7 +275,7 @@
        (blank)
        ,@(when comp (list (build-do-build build-cmd build-cmd-d build-cmd-l bin bd)))
        ,@(when comp '((blank)))
-       ,(build-do-test runner ts name slow to pipe)
+       ,(build-do-test runner ts name slow to pipe tnote)
        (blank)
        ,(build-dispatch name comp))))
 
@@ -284,4 +290,3 @@
     (format t "; Done. ~D scripts projected.~%" (length (targets spec)))))
 
 (project-all)
-

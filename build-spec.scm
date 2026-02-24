@@ -7,6 +7,7 @@
 (Build yaml-grammar
   (projector "sbcl --load build-yaml.lisp --quit")
   (test-suite "yaml-test-suite")
+  (test-note "Note: 94 of the 402 tests are for semantic analysis (duplicate keys, invalid tags, etc.) which require a separate concern layer beyond the structural parser.")
   (gen-dir "gen")
   (bin-dir "bin")
   ;; ── Interpreted languages ─────────────────────────────────

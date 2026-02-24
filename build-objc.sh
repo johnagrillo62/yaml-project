@@ -38,7 +38,7 @@ do_check() {
     echo "  ✓ gnustep-config $(gnustep-config --version 2>&1 | head -1)"
   else
     echo '  ✗ gnustep-config not found'
-    echo '    Install: install gnustep-config for your platform'
+    echo '    Install: apt install gnustep-devel  OR  brew install gnustep'
     fail=1
   fi
   if [ -f gen/PegYaml.m ]; then
@@ -113,6 +113,8 @@ do_test() {
   echo "════════════════════════════════════════════════════"
   echo " Objc: $pass / $total passed  ($fail failed)  ${elapsed}${unit}"
   echo "════════════════════════════════════════════════════"
+  echo 
+  echo 'Note: 94 of the 402 tests are for semantic analysis (duplicate keys, invalid tags, etc.) which require a separate concern layer beyond the structural parser.'
   echo 
 }
 
