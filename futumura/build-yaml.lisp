@@ -54,6 +54,7 @@
     ("objc"     "spec/peg-objc.lisp"     "PegYaml.m")
     ("ocaml"    "spec/peg-ocaml.lisp"    "peg_yaml.ml")
     ("python"   "spec/peg-python.lisp"   "peg_yaml.py")
+    ("powershell"   "spec/peg-powershell.lisp"   "peg_yaml.ps1")
     ("rust"     "spec/peg-rust.lisp"     "peg_yaml.rs")
     ("swift"    "spec/peg-swift.lisp"    "PegYaml.swift")
     ("x86"      "spec/peg-x86.lisp"      "peg_yaml.x86")

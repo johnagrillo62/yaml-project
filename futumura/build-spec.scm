@@ -105,10 +105,15 @@
     (compile "ocamlopt -O2 -o {bin} unix.cmxa {src}")
     (deps "ocamlopt"))
 
-  (target objc
+(target objc
     (file "PegYaml.m")
-    (compile "clang -framework Foundation -O2 -o {bin} {src}")
-    (deps "clang"))
+    (compile-darwin "clang -framework Foundation -O2 -o {bin} {src}")
+    (compile-linux "clang $(gnustep-config --objc-flags) -I/usr/lib/gcc/x86_64-linux-gnu/13/include -fblocks -o {bin} {src} $(gnustep-config --base-libs) -lBlocksRuntime")
+    (deps "clang" "gnustep-config")
+
+
+    )
+
 
   (target x86
     (file "peg_yaml.x86")

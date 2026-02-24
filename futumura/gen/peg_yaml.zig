@@ -105,6 +105,7 @@ fn peg_seq(fns: []const PFn) void {
         f();
         if (g.failed) { restore_inp(); return; }
     }
+    g.save_sp -= 1;
 }
 
 fn peg_alt(fns: []const PFn) void {
@@ -117,12 +118,14 @@ fn peg_alt(fns: []const PFn) void {
     g.failed = true;
 }
 
+
 fn peg_star(f: PFn) void {
     while (true) {
         const old_pos = g.pos;
         save_inp();
         f();
         if (g.failed or g.pos <= old_pos) { restore_inp(); g.failed = false; return; }
+        g.save_sp -= 1;
     }
 }
 
@@ -277,10 +280,14 @@ fn val_fn(v: []const u8) void {
 // ── Main ──
 
 pub fn main() !void {
-    const stdin = std.io.getStdIn();
-    const text = try stdin.readToEndAlloc(std.heap.page_allocator, 1048576);
-    defer std.heap.page_allocator.free(text);
-
+    const gpa = std.heap.page_allocator;
+    const args = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, args);
+    const text = if (args.len > 1)
+        try std.fs.cwd().readFileAlloc(gpa, args[1], 1048576)
+    else
+        try std.io.getStdIn().readToEndAlloc(gpa, 1048576);
+    defer gpa.free(text);
     g.src = text;
     g.pos = 0;
     g.line = 1;
@@ -288,9 +295,7 @@ pub fn main() !void {
     g.failed = false;
     g.rval_len = 0;
     g.save_sp = 0;
-
     l_yaml_stream();
-
     const stdout = std.io.getStdOut().writer();
     if (!g.failed) {
         try stdout.print("OK: {d} chars\n", .{g.pos});
@@ -299,7 +304,7 @@ pub fn main() !void {
         try stderr.print("FAIL @{d}\n", .{g.pos});
         std.process.exit(1);
     }
-}
+    }
 
 // ════════════════════════════════════════════════════════════════ 
 // Wrapper functions (bash has no closures) 

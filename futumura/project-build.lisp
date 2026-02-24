@@ -143,16 +143,29 @@
      (echo "'All prerequisites satisfied.'")
      (echo "")))
 
-(defun build-do-build (cmd bin bd)
+(defun build-do-build (cmd cmd-darwin cmd-linux bin bd)
   `(fn "do_build"
      (echo "'Building...'")
      (mkdir ,bd)
-     (exec ,cmd)
+     ,(if (and cmd-darwin cmd-linux)
+        `(progn
+           (exec ,(format nil "if [ \"$(uname)\" = \"Darwin\" ]; then"))
+           (exec ,(format nil "  ~A" cmd-darwin))
+           (exec "else")
+           (exec ,(format nil "  ~A" cmd-linux))
+           (exec "fi"))
+        `(exec ,(or cmd cmd-darwin cmd-linux)))
      (echo "'  ✓ Build complete'")
      (echo "")))
 
-(defun build-do-test (runner ts name slow timeout)
+(defun build-do-test (runner ts name slow timeout pipe)
   (let ((to (or timeout "1")))
+    (let ((run-ok (if pipe
+                      (format nil "cat \"$sd/in.yaml\" | timeout ~A ~A" to runner)
+                      (format nil "timeout ~A ~A \"$sd/in.yaml\"" to runner)))
+          (run-err (if pipe
+                       (format nil "cat \"$sd/in.yaml\" | timeout ~A ~A >/dev/null 2>&1" to runner)
+                       (format nil "timeout ~A ~A \"$sd/in.yaml\" >/dev/null 2>&1" to runner))))
   `(fn "do_test"
      ,@(when slow
          `((echo ,(format nil "'⚠  ~A'" slow))
@@ -176,19 +189,23 @@
            (exec "[ -f \"$sd/error\" ] && total=$((total+1)) && pass=$((pass+1))")
            (continue))
          (incr "total")
+         ;; ── cursor progress: update in place ──
+         (printf "'\\r\\033[K  %d: %s' \"$total\" \"$(basename \"$d\")\"")
          (if (file? "\"$sd/error\"")
            (progn
-             (subsh ,(format nil "timeout ~A ~A \"$sd/in.yaml\" >/dev/null 2>&1" to runner))
-             (exec "[ $? -ne 0 ] && pass=$((pass+1)) || fail=$((fail+1))"))
+             (exec ,(format nil "rc=0; (~A) || rc=$?" run-err))
+             (exec "[ $rc -ne 0 ] && pass=$((pass+1)) || fail=$((fail+1))"))
            (progn
-             (exec ,(format nil "result=$( (timeout ~A ~A \"$sd/in.yaml\") 2>/dev/null) || true" to runner))
+             (exec ,(format nil "result=$(~A 2>/dev/null) || true" run-ok))
              (exec "echo \"$result\" | grep -q \"^OK:\" && pass=$((pass+1)) || fail=$((fail+1))")))))
+     ;; ── clear the progress line ──
+     (printf "'\\r\\033[K'")
      (exec "end_time=$(date +%s%N 2>/dev/null || date +%s)")
      (exec "if [ ${#start_time} -gt 10 ]; then elapsed=$(( (end_time - start_time) / 1000000 )); unit=ms; else elapsed=$((end_time - start_time)); unit=s; fi")
      (echo "\"════════════════════════════════════════════════════\"")
      (echo ,(format nil "\" ~A: $pass / $total passed  ($fail failed)  ${elapsed}${unit}\"" (cn name)))
      (echo "\"════════════════════════════════════════════════════\"")
-     (echo ""))))
+     (echo "")))))
 
 (defun build-dispatch (name comp)
   `(case "\"${1:-}\""
@@ -224,11 +241,14 @@
          (deps   (prop 'deps props))
          (comp   (compiled-p props))
          (cmd    (prop1 'compile props))
+         (cmd-d  (prop1 'compile-darwin props))
+         (cmd-l  (prop1 'compile-linux props))
          (interp (prop1 'interp props))
          (runcmd (prop1 'run props))
          (vercmd (prop1 'version props))
          (slow   (prop1 'slow props))
          (to     (prop1 'timeout props))
+         (pipe   (prop1 'pipe-input props))
          (ts     (or (prop1 'test-suite body) "yaml-test-suite"))
          (gd     (or (prop1 'gen-dir body) "gen"))
          (bd     (or (prop1 'bin-dir body) "bin"))
@@ -236,7 +256,10 @@
          (bin    (format nil "~A/~A" bd (ln name)))
          (runner (cond (runcmd (sv runcmd src bin bd))
                        (comp bin)
-                       (t (format nil "~A ~A" interp src)))))
+                       (t (format nil "~A ~A" interp src))))
+         (build-cmd   (when cmd (sv cmd src bin bd)))
+         (build-cmd-d (when cmd-d (sv cmd-d src bin bd)))
+         (build-cmd-l (when cmd-l (sv cmd-l src bin bd))))
     `(progn
        ,(build-header name src (when comp bin))
        (blank)
@@ -244,9 +267,9 @@
        (blank)
        ,(build-do-check deps vercmd src ts)
        (blank)
-       ,@(when comp (list (build-do-build (sv cmd src bin bd) bin bd)))
+       ,@(when comp (list (build-do-build build-cmd build-cmd-d build-cmd-l bin bd)))
        ,@(when comp '((blank)))
-       ,(build-do-test runner ts name slow to)
+       ,(build-do-test runner ts name slow to pipe)
        (blank)
        ,(build-dispatch name comp))))
 
@@ -261,3 +284,4 @@
     (format t "; Done. ~D scripts projected.~%" (length (targets spec)))))
 
 (project-all)
+

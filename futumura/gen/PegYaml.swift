@@ -1862,12 +1862,16 @@ func l_yaml_stream(_ inp: Input) -> Result {
 
 // ── API ──
 
+func out(_ s: String) {
+    FileHandle.standardOutput.write((s + "\n").data(using: .utf8)!)
+}
+
 func printAst(_ node: Ast, _ depth: Int) {
     let indent = String(repeating: "  ", count: depth)
     if node.isLeaf {
-        print("\(indent)SCALAR: \"\(node.text)\"")
+        out("\(indent)SCALAR: \"\(node.text)\"")
     } else {
-        print("\(indent)\(node.tag)")
+        out("\(indent)\(node.tag)")
         for c in node.children { printAst(c, depth + 1) }
     }
 }
@@ -1877,14 +1881,21 @@ func printAst(_ node: Ast, _ depth: Int) {
 func runMain() {
     let text: String
     if CommandLine.arguments.count > 1 {
-        text = try! String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
+        let path = CommandLine.arguments[1]
+        guard let data = FileManager.default.contents(atPath: path),
+              let s = String(data: data, encoding: .utf8) else {
+            FileHandle.standardError.write("Cannot read: \(path)\n".data(using: .utf8)!)
+            _exit(1)
+            return
+        }
+        text = s
     } else {
         text = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
     }
     let inp = Input(text)
     let r = l_yaml_stream(inp)
     if !r.fail {
-        print("OK: \(r.rest.pos) chars")
+        out("OK: \(r.rest.pos) chars")
         if let ast = r.ast { printAst(ast, 0) }
     } else {
         FileHandle.standardError.write("FAIL @\(r.rest.pos): \(r.err)\n".data(using: .utf8)!)

@@ -34,6 +34,13 @@ do_check() {
     echo '    Install: apt install clang  OR  xcode-select --install'
     fail=1
   fi
+  if command -v gnustep-config >/dev/null 2>&1; then
+    echo "  ✓ gnustep-config $(gnustep-config --version 2>&1 | head -1)"
+  else
+    echo '  ✗ gnustep-config not found'
+    echo '    Install: install gnustep-config for your platform'
+    fail=1
+  fi
   if [ -f gen/PegYaml.m ]; then
     echo "  ✓ gen/PegYaml.m ($(wc -l < gen/PegYaml.m) lines)"
   else
@@ -60,7 +67,11 @@ do_check() {
 do_build() {
   echo 'Building...'
   mkdir -p bin
-  clang -framework Foundation -O2 -o bin/objc gen/PegYaml.m
+  if [ "$(uname)" = "Darwin" ]; then
+    clang -framework Foundation -O2 -o bin/objc gen/PegYaml.m
+  else
+    clang $(gnustep-config --objc-flags) -I/usr/lib/gcc/x86_64-linux-gnu/13/include -fblocks -o bin/objc gen/PegYaml.m $(gnustep-config --base-libs) -lBlocksRuntime
+  fi
   echo '  ✓ Build complete'
   echo 
 }
@@ -86,15 +97,17 @@ do_test() {
         continue
       fi
       total=$(($total+1))
+      printf '\r\033[K  %d: %s' "$total" "$(basename "$d")"
       if [ -f "$sd/error" ]; then
-        (timeout 1 bin/objc "$sd/in.yaml" >/dev/null 2>&1)
-        [ $? -ne 0 ] && pass=$((pass+1)) || fail=$((fail+1))
+        rc=0; (timeout 1 bin/objc "$sd/in.yaml" >/dev/null 2>&1) || rc=$?
+        [ $rc -ne 0 ] && pass=$((pass+1)) || fail=$((fail+1))
       else
-        result=$( (timeout 1 bin/objc "$sd/in.yaml") 2>/dev/null) || true
+        result=$(timeout 1 bin/objc "$sd/in.yaml" 2>/dev/null) || true
         echo "$result" | grep -q "^OK:" && pass=$((pass+1)) || fail=$((fail+1))
       fi
     done
   done
+  printf '\r\033[K'
   end_time=$(date +%s%N 2>/dev/null || date +%s)
   if [ ${#start_time} -gt 10 ]; then elapsed=$(( (end_time - start_time) / 1000000 )); unit=ms; else elapsed=$((end_time - start_time)); unit=s; fi
   echo "════════════════════════════════════════════════════"

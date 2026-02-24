@@ -86,15 +86,17 @@ do_test() {
         continue
       fi
       total=$(($total+1))
+      printf '\r\033[K  %d: %s' "$total" "$(basename "$d")"
       if [ -f "$sd/error" ]; then
-        (timeout 1 bin/haskell "$sd/in.yaml" >/dev/null 2>&1)
-        [ $? -ne 0 ] && pass=$((pass+1)) || fail=$((fail+1))
+        rc=0; (timeout 1 bin/haskell "$sd/in.yaml" >/dev/null 2>&1) || rc=$?
+        [ $rc -ne 0 ] && pass=$((pass+1)) || fail=$((fail+1))
       else
-        result=$( (timeout 1 bin/haskell "$sd/in.yaml") 2>/dev/null) || true
+        result=$(timeout 1 bin/haskell "$sd/in.yaml" 2>/dev/null) || true
         echo "$result" | grep -q "^OK:" && pass=$((pass+1)) || fail=$((fail+1))
       fi
     done
   done
+  printf '\r\033[K'
   end_time=$(date +%s%N 2>/dev/null || date +%s)
   if [ ${#start_time} -gt 10 ]; then elapsed=$(( (end_time - start_time) / 1000000 )); unit=ms; else elapsed=$((end_time - start_time)); unit=s; fi
   echo "════════════════════════════════════════════════════"
