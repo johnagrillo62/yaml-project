@@ -34,9 +34,7 @@ One grammar. Eighteen languages. 308/308 tests. All of them.
 ## The key insight
 
 The YAML 1.2 spec already defines its grammar formally — 211
-productions in Haskell-like notation. The spec authors were *right
-there*. They had the formal grammar, they had a functional language,
-they had code-as-data staring them in the face.
+productions in Haskell-like notation.
 
 But Haskell isn't code-as-data. You can't walk Haskell source as a
 data structure. You can't destructure a Haskell production into its
