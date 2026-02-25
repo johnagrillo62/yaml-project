@@ -5,7 +5,7 @@
 ;;; ── Identity ──
 
 (def-tgt "target-name" "Go")
-(def-tgt "default-output" "yaml_reader.go")
+(def-tgt "default-output" "peg_yaml.go")
 
 (def-tgt "keywords"
   '("break" "case" "chan" "const" "continue" "default" "defer" "else"
@@ -96,17 +96,18 @@
 
 (def-tgt "fwd-decl" nil)  ;; Go doesn't need forward declarations
 
-;;; ── Header ──
+;;; ── Header (CHANGED: package yaml, no os/io imports) ──
 
 (def-tgt "header"
 "// ════════════════════════════════════════════════════════════════
-package main
+// Generated from the YAML 1.2 specification grammar.
+// Do not edit — regenerate from yaml-grammar.scm
+// ════════════════════════════════════════════════════════════════
+package yaml
 
 import (
 	\"fmt\"
-	\"io\"
 	\"math\"
-	\"os\"
 	\"strconv\"
 	\"strings\"
 )")
@@ -333,44 +334,32 @@ func parse_sym(inp Input, f PFn, sym string) Result {
 func val(inp Input, v string) Result { r := ok(inp); r.tag = v; return r }"
 ))
 
-;;; ── API ──
+;;; ── API (CHANGED: PrintAst exported, Parse function added) ──
 
 (def-tgt "api"
 "// ── API ──
 
-func printAst(node *Ast, depth int) {
+func PrintAst(node *Ast, depth int) {
 	indent := strings.Repeat(\"  \", depth)
 	if node.isLeaf {
 		fmt.Printf(\"%sSCALAR: \\\"%s\\\"\\n\", indent, node.text)
 	} else {
 		fmt.Printf(\"%s%s\\n\", indent, node.tag)
-		for _, c := range node.children { printAst(c, depth+1) }
+		for _, c := range node.children { PrintAst(c, depth+1) }
 	}
-}")
+}
 
-;;; ── Main ──
-
-(def-tgt "main-fn"
-"func main() {
-	var text string
-	if len(os.Args) > 1 {
-		b, err := os.ReadFile(os.Args[1])
-		if err != nil { fmt.Fprintf(os.Stderr, \"Cannot open %s\\n\", os.Args[1]); os.Exit(1) }
-		text = string(b)
-	} else {
-		b, _ := io.ReadAll(os.Stdin)
-		text = string(b)
-	}
-	inp := newInput(&text)
+// Parse parses YAML and returns the AST root.
+func Parse(text string) (*Ast, error) {
+	inp := Input{src: &text, pos: 0, line: 1, col: 0}
 	r := l_yaml_stream(inp)
-	if !r.fail {
-		fmt.Printf(\"OK: %d chars\\n\", r.rest.pos)
-		if r.ast != nil { printAst(r.ast, 0) }
-	} else {
-		fmt.Fprintf(os.Stderr, \"FAIL @%d: %s\\n\", r.rest.pos, r.err)
-		os.Exit(1)
-	}
+	if r.fail { return nil, fmt.Errorf(\"parse failed at position %d: %s\", r.rest.pos, r.err) }
+	return r.ast, nil
 }")
+
+;;; ── Main (CHANGED: set to nil, main lives in separate cmd/ file) ──
+
+(def-tgt "main-fn" nil)
 
 ;;; ── Concerns (native API layer) ──
 
@@ -503,3 +492,4 @@ func (y *YamlValue) Size() int {
     return c.convert(r.ast)
 }")
   (def-tgt "cv" cv))
+
