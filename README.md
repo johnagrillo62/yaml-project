@@ -38,8 +38,7 @@ The YAML 1.2 spec defines 211 grammar rules. They look like functions.
 They have parameters. They call each other. But nobody runs them —
 everybody reads the spec and hand-codes a parser.
 
-The conversion from Haskell BNF to s-expressions was performed using Claude (Anthropic). 
-The design of the projector architecture, target specifications, and grammar design are original work.
+The conversion from Haskell BNF to s-expressions was performed using Claude (Anthropic). .
 
 The spec says Rule 28 is:
 ```
