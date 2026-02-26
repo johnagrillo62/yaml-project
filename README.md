@@ -1,5 +1,11 @@
-# The Yaml Project
+# The Metaprogrammer's Journey
 
+[Read the draft (PDF)](docs/metaprogrammers-journey.pdf)
+
+
+
+# The Yaml Project
+.
 
 Acknowledgments
 The s-expression grammar in this project is derived from the YamlReference Haskell package by Oren Ben-Kiki, co-creator of the YAML specification. His reference implementation translated the YAML 1.2 spec into precise, machine-verified BNF productions — without which this project would not exist.
