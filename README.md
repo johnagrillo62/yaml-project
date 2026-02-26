@@ -1,5 +1,9 @@
 # The Yaml Project
 
+
+Acknowledgments
+The s-expression grammar in this project is derived from the YamlReference Haskell package by Oren Ben-Kiki, co-creator of the YAML specification. His reference implementation translated the YAML 1.2 spec into precise, machine-verified BNF productions — without which this project would not exist.
+
 I spent 20 years chasing metaprogramming. This is where I ended up.
 
 One grammar. Eighteen languages. 308/308 tests.
