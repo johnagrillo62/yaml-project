@@ -1,5 +1,9 @@
 # The Yaml Project
 
+
+Acknowledgments
+The s-expression grammar in this project is derived from the YamlReference Haskell package by Oren Ben-Kiki, co-creator of the YAML specification. His reference implementation translated the YAML 1.2 spec into precise, machine-verified BNF productions — without which this project would not exist.
+
 I spent 20 years chasing metaprogramming. This is where I ended up.
 
 One grammar. Eighteen languages. 308/308 tests.
@@ -34,7 +38,7 @@ The YAML 1.2 spec defines 211 grammar rules. They look like functions.
 They have parameters. They call each other. But nobody runs them —
 everybody reads the spec and hand-codes a parser.
 
-I put the 211 rules in S-expressions and ran them.
+The conversion from Haskell BNF to s-expressions was performed using Claude (Anthropic). .
 
 The spec says Rule 28 is:
 ```
