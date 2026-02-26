@@ -1,6 +1,6 @@
 # The Metaprogrammer's Journey
 
-[Read the draft (PDF)](docs/metaprogrammers-journey.pdf)
+[Read the draft (PDF)](doc/metaprogrammers-journey.pdf)
 
 
 
