@@ -45,6 +45,9 @@ They have parameters. They call each other. But nobody runs them —
 everybody reads the spec and hand-codes a parser.
 
 The conversion from Haskell BNF to s-expressions was performed using Claude (Anthropic). .
+This was dictation, not generation — I had to find the formal grammar on Hackage, recognize that it was the right source of truth, see that s-expressions were the correct target representation, and tell Claude that this conversion was possible. Claude didn't know the Haskell BNF existed, didn't know it could become s-expressions, and would never have connected it to projection
+
+
 
 The spec says Rule 28 is:
 ```
