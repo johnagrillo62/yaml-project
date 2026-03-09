@@ -6,6 +6,7 @@
 # The parser was generated from the YAML 1.2 spec's 211 grammar rules.
 # 
 # Source: gen/PegYaml.fs
+# Spec:   spec/yaml-peg-fsharp.lisp
 # Binary: bin/fsharp
 # ════════════════════════════════════════════════════════════════
 
@@ -39,6 +40,13 @@ do_check() {
   else
     echo '  ✗ gen/PegYaml.fs not found'
     echo '    Run: sbcl --load build-yaml.lisp --quit'
+    fail=1
+  fi
+  if [ -f spec/yaml-peg-fsharp.lisp ]; then
+    echo "  ✓ spec/yaml-peg-fsharp.lisp ($(wc -l < spec/yaml-peg-fsharp.lisp) lines)"
+  else
+    echo '  ✗ spec/yaml-peg-fsharp.lisp not found'
+    echo '    Check spec/ directory'
     fail=1
   fi
   if [ -d yaml-test-suite ]; then

@@ -6,6 +6,7 @@
 # The parser was generated from the YAML 1.2 spec's 211 grammar rules.
 # 
 # Source: gen/PegYaml.m
+# Spec:   spec/yaml-peg-objc.lisp
 # Binary: bin/objc
 # ════════════════════════════════════════════════════════════════
 
@@ -46,6 +47,13 @@ do_check() {
   else
     echo '  ✗ gen/PegYaml.m not found'
     echo '    Run: sbcl --load build-yaml.lisp --quit'
+    fail=1
+  fi
+  if [ -f spec/yaml-peg-objc.lisp ]; then
+    echo "  ✓ spec/yaml-peg-objc.lisp ($(wc -l < spec/yaml-peg-objc.lisp) lines)"
+  else
+    echo '  ✗ spec/yaml-peg-objc.lisp not found'
+    echo '    Check spec/ directory'
     fail=1
   fi
   if [ -d yaml-test-suite ]; then

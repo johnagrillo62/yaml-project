@@ -6,6 +6,7 @@
 # The parser was generated from the YAML 1.2 spec's 211 grammar rules.
 # 
 # Source: gen/peg_yaml.x86
+# Spec:   spec/yaml-peg-x86.lisp
 # Binary: bin/x86
 # ════════════════════════════════════════════════════════════════
 
@@ -46,6 +47,13 @@ do_check() {
   else
     echo '  ✗ gen/peg_yaml.x86 not found'
     echo '    Run: sbcl --load build-yaml.lisp --quit'
+    fail=1
+  fi
+  if [ -f spec/yaml-peg-x86.lisp ]; then
+    echo "  ✓ spec/yaml-peg-x86.lisp ($(wc -l < spec/yaml-peg-x86.lisp) lines)"
+  else
+    echo '  ✗ spec/yaml-peg-x86.lisp not found'
+    echo '    Check spec/ directory'
     fail=1
   fi
   if [ -d yaml-test-suite ]; then

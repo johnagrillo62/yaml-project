@@ -6,6 +6,7 @@
 # The parser was generated from the YAML 1.2 spec's 211 grammar rules.
 # 
 # Source: gen/peg_yaml.rs
+# Spec:   spec/yaml-peg-rust.lisp
 # Binary: bin/rust
 # ════════════════════════════════════════════════════════════════
 
@@ -39,6 +40,13 @@ do_check() {
   else
     echo '  ✗ gen/peg_yaml.rs not found'
     echo '    Run: sbcl --load build-yaml.lisp --quit'
+    fail=1
+  fi
+  if [ -f spec/yaml-peg-rust.lisp ]; then
+    echo "  ✓ spec/yaml-peg-rust.lisp ($(wc -l < spec/yaml-peg-rust.lisp) lines)"
+  else
+    echo '  ✗ spec/yaml-peg-rust.lisp not found'
+    echo '    Check spec/ directory'
     fail=1
   fi
   if [ -d yaml-test-suite ]; then

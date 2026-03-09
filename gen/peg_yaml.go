@@ -2,11 +2,13 @@
 // Generated from the YAML 1.2 specification grammar.
 // Do not edit — regenerate from yaml-grammar.scm
 // ════════════════════════════════════════════════════════════════
-package yaml
+package main
 
 import (
 	"fmt"
+	"io"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -1982,3 +1984,42 @@ func Load(text string) *YamlValue {
     return c.convert(r.ast)
 }
 
+func main() {
+	var text string
+	args := os.Args[1:]
+	if len(args) > 0 {
+		b, err := os.ReadFile(args[0])
+		if err != nil { fmt.Fprintf(os.Stderr, "Cannot open %s: %v\n", args[0], err); os.Exit(1) }
+		text = string(b)
+	} else {
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil { fmt.Fprintf(os.Stderr, "Read error: %v\n", err); os.Exit(1) }
+		text = string(b)
+	}
+	ast, err := Parse(text)
+	if err != nil { fmt.Fprintf(os.Stderr, "FAIL: %v\n", err); os.Exit(1) }
+	fmt.Printf("OK: %d chars\n", len(text))
+	PrintAst(ast, 0)
+	fmt.Println()
+	fmt.Println("── Native API ──")
+	val := Load(text)
+	switch val.Tag {
+	case YMap:
+		for k, v := range val.M {
+			fmt.Printf("%s: ", k)
+			switch v.Tag {
+			case YNull:  fmt.Println("null")
+			case YBool:  fmt.Println(v.B)
+			case YInt:   fmt.Println(v.I)
+			case YFloat: fmt.Println(v.F)
+			case YStr:   fmt.Printf("\"%s\"\n", v.S)
+			case YMap:   fmt.Printf("{map, %d keys}\n", len(v.M))
+			case YSeq:   fmt.Printf("[seq, %d items]\n", len(v.V))
+			}
+		}
+	case YSeq:
+		fmt.Printf("[seq, %d items]\n", len(val.V))
+	default:
+		fmt.Printf("%v\n", val)
+	}
+}

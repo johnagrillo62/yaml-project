@@ -6,6 +6,7 @@
 # The parser was generated from the YAML 1.2 spec's 211 grammar rules.
 # 
 # Source: gen/PegYaml.kt
+# Spec:   spec/yaml-peg-kotlin.lisp
 # Binary: bin/kotlin
 # ════════════════════════════════════════════════════════════════
 
@@ -46,6 +47,13 @@ do_check() {
   else
     echo '  ✗ gen/PegYaml.kt not found'
     echo '    Run: sbcl --load build-yaml.lisp --quit'
+    fail=1
+  fi
+  if [ -f spec/yaml-peg-kotlin.lisp ]; then
+    echo "  ✓ spec/yaml-peg-kotlin.lisp ($(wc -l < spec/yaml-peg-kotlin.lisp) lines)"
+  else
+    echo '  ✗ spec/yaml-peg-kotlin.lisp not found'
+    echo '    Check spec/ directory'
     fail=1
   fi
   if [ -d yaml-test-suite ]; then

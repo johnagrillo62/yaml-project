@@ -6,6 +6,7 @@
 # The parser was generated from the YAML 1.2 spec's 211 grammar rules.
 # 
 # Source: gen/PegYaml.swift
+# Spec:   spec/yaml-peg-swift.lisp
 # Binary: bin/swift
 # ════════════════════════════════════════════════════════════════
 
@@ -39,6 +40,13 @@ do_check() {
   else
     echo '  ✗ gen/PegYaml.swift not found'
     echo '    Run: sbcl --load build-yaml.lisp --quit'
+    fail=1
+  fi
+  if [ -f spec/yaml-peg-swift.lisp ]; then
+    echo "  ✓ spec/yaml-peg-swift.lisp ($(wc -l < spec/yaml-peg-swift.lisp) lines)"
+  else
+    echo '  ✗ spec/yaml-peg-swift.lisp not found'
+    echo '    Check spec/ directory'
     fail=1
   fi
   if [ -d yaml-test-suite ]; then

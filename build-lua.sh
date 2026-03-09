@@ -6,6 +6,7 @@
 # The parser was generated from the YAML 1.2 spec's 211 grammar rules.
 # 
 # Source: gen/peg_yaml.lua
+# Spec:   spec/yaml-peg-lua.lisp
 # ════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -38,6 +39,13 @@ do_check() {
   else
     echo '  ✗ gen/peg_yaml.lua not found'
     echo '    Run: sbcl --load build-yaml.lisp --quit'
+    fail=1
+  fi
+  if [ -f spec/yaml-peg-lua.lisp ]; then
+    echo "  ✓ spec/yaml-peg-lua.lisp ($(wc -l < spec/yaml-peg-lua.lisp) lines)"
+  else
+    echo '  ✗ spec/yaml-peg-lua.lisp not found'
+    echo '    Check spec/ directory'
     fail=1
   fi
   if [ -d yaml-test-suite ]; then
