@@ -27,10 +27,11 @@
 (Grammar JSON-RFC8259
 
   ; Rule 1 — top level value
-  (Rule 1 json-text
-    (Seq (Ref ws)
-         (Ref value)
-         (Ref ws)))
+ (Rule 1 json-text
+  (Seq (Ref ws)
+       (Ref value)
+       (Ref ws)
+       (EndOfInput)))
 
   ; Rule 2 — any JSON value
   (Rule 2 value

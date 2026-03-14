@@ -324,7 +324,7 @@ let () =
       Bytes.to_string s
     else if Unix.isatty Unix.stdin then begin
       Printf.eprintf \"Usage: %s [file]\\n\" Sys.argv.(0);
-      Printf.eprintf \"  Reads YAML from file or stdin.\\n\";
+      Printf.eprintf \"  Reads JSON from file or stdin.\\n\";
       Printf.eprintf \"  If no file given and stdin is a terminal, shows this help.\\n\";
       exit 1
     end else begin
@@ -338,7 +338,9 @@ let () =
   if not r.failed then begin
     Printf.printf \"OK: %d chars\\n\" r.rest.pos;
     (match r.ast with Some a -> print_ast a 0 | None -> ())
-  end else
-    Printf.eprintf \"FAIL @%d: %s\\n\" r.rest.pos r.err")
+   end else begin
+    Printf.eprintf \"FAIL @%d: %s\\n\" r.rest.pos r.err;
+    exit 1
+  end")
 
 (def-tgt "namespace-close" nil)

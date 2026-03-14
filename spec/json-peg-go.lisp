@@ -10,7 +10,8 @@
 (def-tgt "keywords"
   '("break" "case" "chan" "const" "continue" "default" "defer" "else"
     "fallthrough" "for" "func" "go" "goto" "if" "import" "interface"
-    "map" "package" "range" "return" "select" "struct" "switch" "type" "var"))
+    "map" "package" "range" "return" "select" "struct" "switch" "type" "var"
+    "char" "string"))
 (def-tgt "keyword-prefix" "r_")
 
 ;;; ── Closure wrapping ──
@@ -100,15 +101,15 @@
 
 (def-tgt "header"
 "// ════════════════════════════════════════════════════════════════
-// Generated from the YAML 1.2 specification grammar.
+// Generated from the JSON grammar (RFC 8259).
 // Do not edit — regenerate from yaml-grammar.scm
 // ════════════════════════════════════════════════════════════════
-package yaml
+package main
 
 import (
 	\"fmt\"
-	\"math\"
-	\"strconv\"
+	\"os\"
+	\"io\"
 	\"strings\"
 )")
 
@@ -307,7 +308,7 @@ func PrintAst(node *Ast, depth int) {
 	}
 }
 
-// Parse parses YAML and returns the AST root.
+// Parse parses JSON and returns the AST root.
 func Parse(text string) (*Ast, error) {
 	inp := Input{src: &text, pos: 0, line: 1, col: 0}
 	r := json_text(inp)
@@ -317,7 +318,25 @@ func Parse(text string) (*Ast, error) {
 
 ;;; ── Main (CHANGED: set to nil, main lives in separate cmd/ file) ──
 
-(def-tgt "main-fn" nil)
+(def-tgt "main-fn"
+"func main() {
+	var text string
+	args := os.Args[1:]
+	if len(args) > 0 {
+		b, err := os.ReadFile(args[0])
+		if err != nil { fmt.Fprintf(os.Stderr, \"Cannot open %s: %v\\n\", args[0], err); os.Exit(1) }
+		text = string(b)
+	} else {
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil { fmt.Fprintf(os.Stderr, \"Read error: %v\\n\", err); os.Exit(1) }
+		text = string(b)
+	}
+	ast, err := Parse(text)
+	if err != nil { fmt.Fprintf(os.Stderr, \"FAIL: %v\\n\", err); os.Exit(1) }
+	fmt.Printf(\"OK: %d chars\\n\", len(text))
+	if ast != nil { PrintAst(ast, 0) }
+	os.Exit(0)
+}")
 
 
 

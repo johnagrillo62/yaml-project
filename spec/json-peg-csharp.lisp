@@ -318,7 +318,7 @@ static void PrintAst(Ast node, int depth) {
 
 public static void Main(string[] args) {
     string text;
-    if (args.Length > 0) text = File.ReadAllText(args[0]);
+    if (args.Length > 0) text = File.ReadAllText(args[0], System.Text.Encoding.UTF8);
     else text = Console.In.ReadToEnd();
     var inp = new Input(text, 0, 1, 0);
     var r = json_text(inp);

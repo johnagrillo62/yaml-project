@@ -323,7 +323,9 @@
 
 (defun ce-char (x env)
   (cond
-    ((integerp x) (tcall (comb "match-cp") (format nil "~D" x)))
+    ((integerp x)   (tcall (comb "match-cp") (format nil "~D" x)))
+    ((characterp x) (tcall (comb "match-cp") (format nil "~D" (char-code x))))  ; ← NEW
+    ((and (listp x) (eq (car x) 'HEX)) (ce-hex (cadr x)))
     ((and (symbolp x) (string= (symbol-name x) "SQUOTE")) (tcall (comb "match-cp") "39"))
     ((and (symbolp x) (string= (symbol-name x) "DQUOTE")) (tcall (comb "match-cp") "34"))
     ((and (symbolp x) (member x env))
@@ -331,23 +333,31 @@
     ((symbolp x) (tcall (comb "match-cp") (format nil "~D" (char-code (char (symbol-name x) 0)))))
     (t (tcall (comb "match-cp") (format nil "~D" x)))))
 
+
 (defun hex-fmt (hex-str)
   "Format a hex value using target's hex-prefix (default 0x)."
   (let ((pfx (or (tgt "hex-prefix") "0x")))
     (format nil "~A~A" pfx hex-str)))
 
+
 (defun ce-hex (v)
-  (let ((s (string-upcase (if (integerp v) (format nil "~D" v) (symbol-name v)))))
+  (let ((s (string-upcase
+            (cond ((integerp v) (format nil "~D" v))   ; "30" not "1E"
+                  ((characterp v) (format nil "~D" (char-code v)))
+                  (t (symbol-name v))))))
     (tcall (comb "match-cp") (hex-fmt s))))
+
 
 (defun ce-range (lo hi)
   (flet ((hv (x)
            (if (and (listp x) (eq (car x) 'HEX))
                (hex-fmt (string-upcase
-                         (if (integerp (cadr x)) (format nil "~D" (cadr x))
-                             (symbol-name (cadr x)))))
+                         (cond ((integerp (cadr x)) (format nil "~D" (cadr x)))
+                               ((characterp (cadr x)) (format nil "~D" (char-code (cadr x))))
+                               (t (symbol-name (cadr x))))))
                (if (integerp x) (format nil "~D" x)
-                   (format nil "~D" (char-code (char (symbol-name x) 0)))))))
+                   (if (characterp x) (format nil "~D" (char-code x))
+                       (format nil "~D" (char-code (char (symbol-name x) 0))))))))
     (tcall (comb "match-range") (hv lo) (hv hi))))
 
 ;;; ═══════════════════════════════════════════════════════════════════

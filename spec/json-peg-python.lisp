@@ -12,7 +12,8 @@
     "break" "class" "continue" "def" "del" "elif" "else" "except"
     "finally" "for" "from" "global" "if" "import" "in" "is"
     "lambda" "nonlocal" "not" "or" "pass" "raise" "return" "try"
-    "while" "with" "yield"))
+    "while" "with" "yield"
+    "char" "string"))
 (def-tgt "keyword-prefix" "r_")
 (def-tgt "comment-prefix" "#")
 
@@ -119,15 +120,15 @@ def adv(i):
 
 "# ── AST ──
 
-class YAMLNode:
+class JSONNode:
     __slots__ = ('type', 'text', 'children', 'is_leaf')
     def __init__(self, type, text=None, children=None, is_leaf=False):
         self.type = type; self.text = text
         self.children = children if children is not None else []; self.is_leaf = is_leaf
     @staticmethod
-    def branch(t): return YAMLNode(t)
+    def branch(t): return JSONNode(t)
     @staticmethod
-    def leaf(t): return YAMLNode('SCALAR', text=t, is_leaf=True)"
+    def leaf(t): return JSONNode('SCALAR', text=t, is_leaf=True)"
 
 "# ── Result ──
 

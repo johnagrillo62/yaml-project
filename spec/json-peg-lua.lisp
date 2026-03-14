@@ -7,10 +7,14 @@
 (def-tgt "target-name" "Lua")
 (def-tgt "default-output" "json_reader.lua")
 
+
 (def-tgt "keywords"
   '("and" "break" "do" "else" "elseif" "end" "false" "for" "function"
     "goto" "if" "in" "local" "nil" "not" "or" "repeat" "return"
-    "then" "true" "until" "while"))
+    "then" "true" "until" "while"
+    "string" "table" "math" "io" "os" "type" "pairs" "ipairs"
+    "print" "error" "assert" "require" "pcall" "xpcall"))
+
 (def-tgt "keyword-prefix" "r_")
 
 ;;; ── Closure wrapping ──

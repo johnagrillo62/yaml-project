@@ -33,13 +33,25 @@
 
 (def-tgt "seq-emit"
   (lambda (wrapped-fns)
-    (let ((n (length wrapped-fns)))
-      (format nil "peg_seq(inp, ~D, (PFn[]){~{~A~^, ~}})" n wrapped-fns))))
+    (let* ((body (format nil "~{~A~^, ~}" wrapped-fns))
+           (n (let ((count 0) (i 0) (len (length body)))
+                (loop while (< i (- len 3))
+                      do (when (string= (subseq body i (+ i 4)) "^Res")
+                           (incf count))
+                         (incf i))
+                count)))
+      (format nil "peg_seq(inp, ~D, (PFn[]){~A})" n body))))
 
 (def-tgt "alt-emit"
   (lambda (wrapped-fns)
-    (let ((n (length wrapped-fns)))
-      (format nil "peg_alt(inp, ~D, (PFn[]){~{~A~^, ~}})" n wrapped-fns))))
+    (let* ((body (format nil "~{~A~^, ~}" wrapped-fns))
+           (n (let ((count 0) (i 0) (len (length body)))
+                (loop while (< i (- len 3))
+                      do (when (string= (subseq body i (+ i 4)) "^Res")
+                           (incf count))
+                         (incf i))
+                count)))
+      (format nil "peg_alt(inp, ~D, (PFn[]){~A})" n body))))
 
 ;;; ── Switch ──
 
@@ -96,7 +108,7 @@
 
 (def-tgt "fn-body"
   (lambda (sig body)
-    (format nil "Res ~A {~%    return ~A;~%}" sig body)))
+    (format nil "Res ~A {~%    if(++_depth>500){_depth--;return peg_fail(inp,@\"depth\");}~%    Res _r=~A;~%    _depth--;return _r;~%}" sig body)))
 
 (def-tgt "fwd-decl"
   (lambda (name params)
@@ -136,19 +148,19 @@ static Input adv(Input i) {
 
 "// ── AST ──
 
-@interface YAMLNode : NSObject { @public
+@interface JSONNode : NSObject { @public
     NSString *type; NSString *text; NSMutableArray *children; BOOL isLeaf;
 }
 + (instancetype)branch:(NSString *)t;
 + (instancetype)leaf:(NSString *)t;
 @end
 
-@implementation YAMLNode
+@implementation JSONNode
 + (instancetype)branch:(NSString *)t {
-    YAMLNode *n = [[YAMLNode alloc] init]; n->type = t; n->children = [NSMutableArray array]; return n;
+    JSONNode *n = [[JSONNode alloc] init]; n->type = t; n->children = [NSMutableArray array]; return n;
 }
 + (instancetype)leaf:(NSString *)t {
-    YAMLNode *n = [[YAMLNode alloc] init]; n->type = @\"SCALAR\"; n->text = t; n->isLeaf = YES; return n;
+    JSONNode *n = [[JSONNode alloc] init]; n->type = @\"SCALAR\"; n->text = t; n->isLeaf = YES; return n;
 }
 @end"
 
@@ -156,7 +168,7 @@ static Input adv(Input i) {
 
 @interface PResult : NSObject { @public
     BOOL failed; NSString *val; Input rest; NSString *tag; int tagInt;
-    YAMLNode *ast; NSMutableArray *astList; NSString *err;
+    JSONNode *ast; NSMutableArray *astList; NSString *err;
 } @end
 @implementation PResult @end
 typedef PResult * Res;
@@ -164,7 +176,8 @@ typedef PResult * Res;
 static Res peg_ok(Input i) { Res r=[PResult new]; r->val=@\"\"; r->rest=i; r->tag=@\"\"; return r; }
 static Res peg_okv(Input i, NSString *v) { Res r=[PResult new]; r->val=v; r->rest=i; r->tag=@\"\"; return r; }
 static Res peg_fail(Input i, NSString *m) { Res r=[PResult new]; r->failed=YES; r->val=@\"\"; r->rest=i; r->tag=@\"\"; r->err=m; return r; }
-static Res ok(Input i) { return peg_ok(i); }"
+static Res ok(Input i) { return peg_ok(i); }
+static int _depth = 0;"
 
 "// ── Context ──
 
@@ -202,7 +215,9 @@ static void mergeAsts(NSMutableArray *dst, Res r) {
 static Res peg_seq(Input inp, int cnt, PFn fns[]) {
     Input cur=inp; NSMutableString *acc=[NSMutableString string]; NSMutableArray *asts=[NSMutableArray array];
     int fi; for(fi=0;fi<cnt;fi++){
-        Res r=fns[fi](cur); if(r->failed) return r;
+        PFn f=Block_copy(fns[fi]);
+        Res r=f(cur); Block_release(f);
+        if(r->failed) return r;
         [acc appendString:r->val?:@\"\"]; mergeAsts(asts,r); cur=r->rest;}
     Res res=peg_okv(cur,acc);
     if(asts.count==1) res->ast=[asts objectAtIndex:0]; else if(asts.count>1) res->astList=asts;
@@ -210,40 +225,50 @@ static Res peg_seq(Input inp, int cnt, PFn fns[]) {
 }
 static Res peg_alt(Input inp, int cnt, PFn fns[]) {
     int fi; for(fi=0;fi<cnt;fi++){
-        Res r=fns[fi](inp); if(!r->failed) return r;}
+        PFn f=Block_copy(fns[fi]);
+        Res r=f(inp); Block_release(f);
+        if(!r->failed) return r;}
     return peg_fail(inp,@\"alt\");
 }
 static Res star(Input inp, PFn f) {
+    PFn fc=Block_copy(f);
     Input cur=inp; NSMutableString *acc=[NSMutableString string]; NSMutableArray *asts=[NSMutableArray array];
-    for(;;){Res r=f(cur); if(r->failed||r->rest.pos<=cur.pos) break;
+    for(;;){Res r=fc(cur); if(r->failed||r->rest.pos<=cur.pos) break;
         [acc appendString:r->val?:@\"\"]; mergeAsts(asts,r); cur=r->rest;}
+    Block_release(fc);
     Res res=peg_okv(cur,acc); if(asts.count>0) res->astList=asts; return res;
 }
 static Res plus_(Input inp, PFn f) {
-    Res first=f(inp); if(first->failed) return first;
-    Res rest=star(first->rest,f);
+    PFn fc=Block_copy(f);
+    Res first=fc(inp); if(first->failed){Block_release(fc);return first;}
+    Res rest=star(first->rest,fc); Block_release(fc);
     NSMutableString *v=[NSMutableString stringWithString:first->val?:@\"\"];
     [v appendString:rest->val?:@\"\"];
     Res res=peg_okv(rest->rest,v);
     NSMutableArray *asts=[NSMutableArray array]; mergeAsts(asts,first); mergeAsts(asts,rest);
     if(asts.count>0) res->astList=asts; return res;
 }
-static Res opt(Input inp, PFn f){Res r=f(inp); return r->failed?peg_ok(inp):r;}
-static Res neg(Input inp, PFn f){Res r=f(inp); return r->failed?peg_ok(inp):peg_fail(inp,@\"neg\");}
+static Res opt(Input inp, PFn f){PFn fc=Block_copy(f);Res r=fc(inp);Block_release(fc); return r->failed?peg_ok(inp):r;}
+static Res neg(Input inp, PFn f){PFn fc=Block_copy(f);Res r=fc(inp);Block_release(fc); return r->failed?peg_ok(inp):peg_fail(inp,@\"neg\");}
 static Res minus(Input inp, PFn fa, PFn fb){
-    Res ra=fa(inp); if(ra->failed) return ra;
-    Res rb=fb(inp); return(!rb->failed&&rb->rest.pos==ra->rest.pos)?peg_fail(inp,@\"excl\"):ra;
+    PFn fac=Block_copy(fa); PFn fbc=Block_copy(fb);
+    Res ra=fac(inp); Block_release(fac);
+    if(ra->failed){Block_release(fbc);return ra;}
+    Res rb=fbc(inp); Block_release(fbc);
+    return(!rb->failed&&rb->rest.pos==ra->rest.pos)?peg_fail(inp,@\"excl\"):ra;
 }
 static Res rep(Input inp, int n, PFn f){
+    PFn fc=Block_copy(f);
     Input cur=inp; NSMutableString *acc=[NSMutableString string];
-    int i; for(i=0;i<n;i++){Res r=f(cur); if(r->failed) return r; [acc appendString:r->val?:@\"\"]; cur=r->rest;}
-    return peg_okv(cur,acc);
+    int i; for(i=0;i<n;i++){Res r=fc(cur); if(r->failed){Block_release(fc);return r;} [acc appendString:r->val?:@\"\"]; cur=r->rest;}
+    Block_release(fc); return peg_okv(cur,acc);
 }
-static Res ahead(Input inp, PFn f){Res r=f(inp); return r->failed?r:peg_ok(inp);}
+static Res ahead(Input inp, PFn f){PFn fc=Block_copy(f);Res r=fc(inp);Block_release(fc); return r->failed?r:peg_ok(inp);}
 static Res behind(Input inp, PFn f){
     if(inp.pos==0) return peg_fail(inp,@\"bh\");
     Input t=(Input){inp.src,inp.pos-1,inp.line,MAX(0,inp.col-1)};
-    Res r=f(t); return r->failed?peg_fail(inp,@\"bh\"):peg_ok(inp);
+    PFn fc=Block_copy(f); Res r=fc(t); Block_release(fc);
+    return r->failed?peg_fail(inp,@\"bh\"):peg_ok(inp);
 }
 static Res sol(Input inp){return inp.col==0?peg_ok(inp):peg_fail(inp,@\"sol\");}
 static Res eof_ok(Input inp){return atEof(inp)?peg_ok(inp):peg_fail(inp,@\"eof\");}"
@@ -255,14 +280,14 @@ static Res eof_ok(Input inp){return atEof(inp)?peg_ok(inp):peg_fail(inp,@\"eof\"
 (def-tgt "api"
 "// ── API ──
 
-static void printAst(YAMLNode *node, int depth) {
+static void printAst(JSONNode *node, int depth) {
     NSMutableString *indent = [NSMutableString string];
     int di; for(di=0;di<depth;di++) [indent appendString:@\"  \"];
     if (node->isLeaf) {
         printf(\"%sSCALAR: \\\"%s\\\"\\n\", indent.UTF8String, node->text.UTF8String);
     } else {
         printf(\"%s%s\\n\", indent.UTF8String, node->type.UTF8String);
-        for (YAMLNode *c in node->children) printAst(c, depth+1);
+        for (JSONNode *c in node->children) printAst(c, depth+1);
     }
 }")
 

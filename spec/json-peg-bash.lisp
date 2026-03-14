@@ -14,11 +14,13 @@
 (def-tgt "comment-prefix" "#")
 (def-tgt "call-style" "bash")
 
+
 (def-tgt "keywords"
   '("case" "do" "done" "elif" "else" "esac" "fi" "for" "function"
     "if" "in" "select" "then" "until" "while" "time"
     "declare" "local" "readonly" "export" "unset"
-    "true" "false" "test"))
+    "true" "false" "test"
+    "string" "number" "value" "object" "array" "char" "integer"))
 (def-tgt "keyword-prefix" "r_")
 
 ;;; ── Identifier rules ──
@@ -443,7 +445,7 @@ print_ast() {
 
 usage() {
     echo \"Usage: $0 [file]\" >&2
-    echo \"  Reads YAML from file or stdin.\" >&2
+    echo \"  Reads JSON from file or stdin.\" >&2
     echo \"  If no file given and stdin is a terminal, shows this help.\" >&2
     exit 1
 }
@@ -466,6 +468,7 @@ main() {
     if [[ $FAILED -eq 0 ]]; then
         echo \"OK: $POS chars\"
         [[ $RAST -ge 0 ]] && print_ast $RAST 0
+        exit 0
     else
         echo \"FAIL @$POS: $RTAG\" >&2
         exit 1

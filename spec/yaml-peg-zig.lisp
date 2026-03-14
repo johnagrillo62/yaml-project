@@ -245,6 +245,8 @@ fn peg_alt(fns: []const PFn) void {
         f();
         if (!g.failed) return;
         restore_inp();
+        g.failed = true;
+
     }
     g.failed = true;
 }

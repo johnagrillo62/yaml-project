@@ -29,7 +29,10 @@
     "namespace" "new" "not" "null" "of" "open" "or" "override"
     "private" "public" "rec" "return" "select" "static" "struct"
     "then" "to" "true" "try" "type" "upcast" "use" "val" "void"
-    "when" "while" "with" "yield"))
+    "when" "while" "with" "yield"
+    "string" "int" "float" "bool" "char" "list" "array"
+    "obj" "unit" "value" "object" "number" "integer"))
+
 (def-tgt "keyword-prefix" "r_")
 
 ;;; ── Closure wrapping ──
@@ -336,7 +339,7 @@ let main argv =
         if argv.Length > 0 then File.ReadAllText(argv.[0])
         elif not Console.IsInputRedirected then
             eprintfn \"Usage: PegJson [file]\"
-            eprintfn \"  Reads YAML from file or stdin.\"
+            eprintfn \"  Reads JSON from file or stdin.\"
             eprintfn \"  If no file given and stdin is a terminal, shows this help.\"
             exit 1
             \"\"

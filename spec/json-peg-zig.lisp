@@ -24,7 +24,8 @@
     "for" "if" "inline" "linksection" "noalias" "nosuspend" "null"
     "opaque" "or" "orelse" "packed" "pub" "resume" "return" "struct"
     "suspend" "switch" "test" "threadlocal" "true" "try" "type"
-    "undefined" "union" "unreachable" "var" "volatile" "while"))
+    "undefined" "union" "unreachable" "var" "volatile" "while"
+    "char" "string"))
 (def-tgt "keyword-prefix" "r_")
 
 ;;; ── Identifier rules ──
@@ -245,6 +246,7 @@ fn peg_alt(fns: []const PFn) void {
         f();
         if (!g.failed) return;
         restore_inp();
+        g.failed = false;
     }
     g.failed = true;
 }
@@ -342,7 +344,7 @@ fn seq_spaces(n: i32, c: []const u8) i32 {
     return n;
 }"
 
-"// ── YAML extensions ──
+"// ── JSON extensions ──
 
 fn build_ast(typ: []const u8, f: PFn) void {
     f();
@@ -410,6 +412,18 @@ fn val_fn(v: []const u8) void {
 
 "// ── Main ──
 
+fn run_parse() void {
+    json_text();
+    const stdout = std.io.getStdOut().writer();
+    if (!g.failed) {
+        stdout.print(\"OK: {d} chars\\n\", .{g.pos}) catch {};
+    } else {
+        const stderr = std.io.getStdErr().writer();
+        stderr.print(\"FAIL @{d}\\n\", .{g.pos}) catch {};
+        std.process.exit(1);
+    }
+}
+
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
     const args = try std.process.argsAlloc(gpa);
@@ -426,16 +440,13 @@ pub fn main() !void {
     g.failed = false;
     g.rval_len = 0;
     g.save_sp = 0;
-    json_text();
-    const stdout = std.io.getStdOut().writer();
-    if (!g.failed) {
-        try stdout.print(\"OK: {d} chars\\n\", .{g.pos});
-    } else {
-        const stderr = std.io.getStdErr().writer();
-        try stderr.print(\"FAIL @{d}\\n\", .{g.pos});
-        std.process.exit(1);
-    }
-    }"
+    const thread = try std.Thread.spawn(
+        .{ .stack_size = 64 * 1024 * 1024 },
+        run_parse,
+        .{},
+    );
+    thread.join();
+}"
 ))
 
 ;;; ── API / Concerns ──

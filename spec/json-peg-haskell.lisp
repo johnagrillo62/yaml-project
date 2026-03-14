@@ -12,7 +12,9 @@
 (def-tgt "keywords"
   '("case" "class" "data" "default" "deriving" "do" "else" "forall"
     "foreign" "if" "import" "in" "infix" "infixl" "infixr" "instance"
-    "let" "module" "newtype" "of" "qualified" "then" "type" "where"))
+    "let" "module" "newtype" "of" "qualified" "then" "type" "where"
+    "char" "string" "integer" "float" "number" "value" "object" "array"
+    "exponent" "fraction" "member" "members" "elements"))
 (def-tgt "keyword-prefix" "r_")
 
 ;;; ── Closure wrapping ──
@@ -113,7 +115,9 @@ import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as Map
 import Data.IORef
 import System.Environment (getArgs)
-import System.IO (hGetContents, stdin)")
+import System.IO (hGetContents, stdin, stderr, hPutStrLn)
+import System.Exit (exitWith, ExitCode(..), exitSuccess)")
+
 
 ;;; ── Runtime ──
 
@@ -364,7 +368,9 @@ main = do
     case ast r of
       Just a  -> printAst a 0
       Nothing -> return ()
+    exitSuccess
   else do
-    putStrLn (\"FAIL @\" ++ show (pos (rest r)) ++ \": \" ++ err r)")
+    hPutStrLn stderr (\"FAIL @\" ++ show (pos (rest r)) ++ \": \" ++ err r)
+    exitWith (ExitFailure 1)")
 
 

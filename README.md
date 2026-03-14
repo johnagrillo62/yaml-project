@@ -5,7 +5,6 @@
 johnagrillo@yahoo.com
 
 # The Yaml Project
-.
 
 Acknowledgments
 The s-expression grammar in this project is derived from the YamlReference Haskell package by Oren Ben-Kiki, co-creator of the YAML specification. His reference implementation translated the YAML 1.2 spec into precise, machine-verified BNF productions — without which this project would not exist.
@@ -236,6 +235,61 @@ indicators, multi-line plain scalars, flow collections, directive
 handling. These parsers handle all of it by construction — they *are*
 the spec.
 
+---
+
+# JSON Projector
+
+Same projector. Different grammar. 17 JSON grammar rules → 12 languages passing
+[JSONTestSuite](https://github.com/nst/JSONTestSuite) (318 tests, RFC 8259).
+
+| Language | File | Tests | Notes |
+|---|---|---|---|
+| Python | `gen/peg_json.py` | 283/318 | ✅ |
+| Lua | `gen/peg_json.lua` | 283/318 | ✅ |
+| Bash | `gen/peg_json.sh` | 283/318 | ✅ |
+| C++ | `gen/peg_json.cpp` | 283/318 | ✅ |
+| C# | `gen/PegJson.cs` | 283/318 | ✅ |
+| F# | `gen/PegJson.fs` | 283/318 | ✅ |
+| Go | `gen/peg_json.go` | 283/318 | ✅ |
+| Haskell | `gen/PegJson.hs` | 283/318 | ✅ |
+| Rust | `gen/peg_json.rs` | 283/318 | ✅ |
+| Swift | `gen/PegJson.swift` | 283/318 | ✅ |
+| OCaml | `gen/peg_json.ml` | 283/318 | ✅ |
+| Kotlin | `gen/PegJson.kt` | 283/318 | ✅ |
+| Zig | `gen/peg_json.zig` | 281/318 | ⚠️ see below |
+| Objective-C | `gen/PegJson.m` | — | ⛔ see below |
+| x86-64 asm | — | — | excluded |
+
+The 35 tests not in the 283 are implementation-defined (`i_*`) — both accept
+and reject are valid per the RFC. Every language gets the same 283.
+
+### Zig — 281/318
+
+Two tests fail: `n_structure_100000_opening_arrays.json` and
+`n_structure_open_array_object.json`. Both are pathological inputs — 100,000
+opening brackets with no closes. They don't test RFC 8259 compliance; they
+test whether your parser survives a DoS attempt.
+
+The generated Zig parser uses recursive descent. 100k frames blow the default
+8MB stack. The fix — spawn the parser on a 64MB thread — works on native Linux
+and macOS. On WSL2 (Windows Subsystem for Linux), the kernel silently ignores
+`pthread_attr_setstacksize`, so the request is dropped and the segfault
+remains.
+
+This matters in practice: Docker on Windows runs inside WSL2. A containerized
+deployment on Windows would hit this. The correct fix is a depth guard in the
+generated array/object rules — reject inputs deeper than 10,000 levels rather
+than crash. That's on the TODO list.
+
+On any real Linux host or macOS, this is not an issue.
+
+### Objective-C — excluded on Linux
+
+GNUstep's blocks runtime segfaults on Linux. ObjC builds and runs correctly
+on macOS with Apple clang. Linux support is deferred.
+
+---
+
 ## Author
 
 John Grillo — C++ programmer, 20 years of metaprogramming.
@@ -245,4 +299,3 @@ More languages coming.
 ## License
 
 MIT
-

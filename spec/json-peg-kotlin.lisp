@@ -10,7 +10,8 @@
 (def-tgt "keywords"
   '("as" "break" "class" "continue" "do" "else" "false" "for" "fun" "if"
     "in" "interface" "is" "null" "object" "package" "return" "super" "this"
-    "throw" "true" "try" "typealias" "typeof" "val" "var" "when" "while"))
+    "throw" "true" "try" "typealias" "typeof" "val" "var" "when" "while"
+    "char" "string"))
 (def-tgt "keyword-prefix" "r_")
 
 ;;; ── Closure wrapping ──

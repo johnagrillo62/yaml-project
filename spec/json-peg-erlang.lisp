@@ -382,7 +382,7 @@ main(Args) ->
             case is_stdin_tty() of
                 true ->
                     io:format(standard_error, \"Usage: peg_json [file]~n\", []),
-                    io:format(standard_error, \"  Reads YAML from file or stdin.~n\", []),
+                    io:format(standard_error, \"  Reads JSON from file or stdin.~n\", []),
                     io:format(standard_error, \"  If no file given and stdin is a terminal, shows this help.~n\", []),
                     halt(1);
                 false ->

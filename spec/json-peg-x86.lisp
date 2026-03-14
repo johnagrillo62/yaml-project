@@ -728,7 +728,7 @@ seq_spaces:
     mov [RTAGINT], rax
     ret"
 
-"; ── YAML extensions ──
+"; ── JSON extensions ──
 
 peg_build:
     ; rdi = tag string ptr, rsi = function pointer (body wrapper)

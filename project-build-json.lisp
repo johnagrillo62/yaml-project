@@ -1,0 +1,372 @@
+;;;; project-build-json.lisp — Project JSON build scripts from build-spec-json.scm
+;;;;
+;;;; Reads the spec, builds a shell AST per target, compiles to bash.
+;;;; Two projections chained: spec → shell AST → bash.
+;;;;
+;;;; Usage: sbcl --load project-build.lisp --quit
+
+(load "emit-shell.lisp")
+
+;;; ── Spec reader ──
+
+(defun read-spec (file)
+  (with-open-file (s file :direction :input)
+    (let ((*read-eval* nil)) (read s))))
+
+(defun prop (key forms)
+  (loop for f in forms
+        when (and (listp f) (symbolp (car f))
+                  (string-equal (symbol-name (car f)) (symbol-name key)))
+        return (cdr f)))
+(defun prop1 (key forms) (car (prop key forms)))
+
+(defun targets (spec)
+  (loop for f in (cddr spec)
+        when (and (listp f) (string-equal (symbol-name (car f)) "TARGET"))
+        collect (cons (cadr f) (cddr f))))
+
+(defun ln (s) (string-downcase (symbol-name s)))
+(defun cn (s) (string-capitalize (symbol-name s)))
+
+(defun sra (old new str)
+  (loop for start = 0 then (+ pos (length new))
+        for pos = (search old str :start2 start)
+        while pos
+        do (setq str (concatenate 'string
+                       (subseq str 0 pos) new
+                       (subseq str (+ pos (length old)))))
+        finally (return str)))
+
+(defun sv (tmpl src bin bd)
+  (sra "{bindir}" bd (sra "{bin}" bin (sra "{src}" src tmpl))))
+
+(defun compiled-p (props)
+  (or (prop1 'compile props)
+      (prop1 'compile-darwin props)
+      (prop1 'compile-linux props)))
+
+;;; ── Install hints ──
+
+(defparameter *hints*
+  '(("python3"  . "apt install python3  OR  brew install python3")
+    ("lua"      . "apt install lua5.4  OR  brew install lua")
+    ("bash"     . "pre-installed on most systems")
+    ("escript"  . "apt install erlang  OR  brew install erlang")
+    ("pwsh"     . "https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell")
+    ("go"       . "https://go.dev/dl/")
+    ("rustc"    . "curl -sSf https://sh.rustup.rs | sh")
+    ("g++"      . "apt install g++  OR  xcode-select --install")
+    ("javac"    . "apt install default-jdk  OR  brew install openjdk")
+    ("java"     . "apt install default-jre  OR  brew install openjdk")
+    ("kotlinc"  . "https://kotlinlang.org/docs/command-line.html")
+    ("mcs"      . "apt install mono-mcs  OR  brew install mono")
+    ("mono"     . "apt install mono-runtime  OR  brew install mono")
+    ("dotnet"   . "https://dotnet.microsoft.com/download")
+    ("ghc"      . "https://www.haskell.org/ghcup/")
+    ("swiftc"   . "https://swift.org/download/")
+    ("zig"      . "https://ziglang.org/download/")
+    ("ocamlopt" . "https://ocaml.org/install")
+    ("clang"    . "apt install clang  OR  xcode-select --install")
+    ("nasm"     . "apt install nasm  OR  brew install nasm")
+    ("ld"       . "apt install binutils")
+    ("gnustep-config" . "apt install gnustep-devel  OR  brew install gnustep")))
+
+(defun hint (dep)
+  (or (cdr (assoc dep *hints* :test #'string=))
+      (format nil "install ~A for your platform" dep)))
+
+;;; ── AST builders ─────────────────────────────────────────────
+;;; These compose shell AST nodes from spec data.
+;;; No strings of shell. Just tree construction.
+
+(defun build-header (name src &optional spec bin)
+  `(progn
+     (comment ,(format nil "════════════════════════════════════════════════════════════════"))
+     (comment ,(format nil "build-~A.sh — ~A YAML 1.2 parser demo" (ln name) (cn name)))
+     (comment "")
+     (comment "Projected from build-spec.scm by the Futumura YAML Projector.")
+     (comment "The parser was generated from the YAML 1.2 spec's 211 grammar rules.")
+     (comment "")
+     (comment ,(format nil "Source: ~A" src))
+     ,@(when spec `((comment ,(format nil "Spec:   ~A" spec))))
+     ,@(when bin `((comment ,(format nil "Binary: ~A" bin))))
+     (comment ,(format nil "════════════════════════════════════════════════════════════════"))
+     (blank)
+     (exec "set -euo pipefail")
+     (exec "cd \"$(dirname \"$0\")\"")))
+
+(defun build-show-system (name)
+  `(fn "show_system"
+     (echo "\"════════════════════════════════════════════════════\"")
+     (echo ,(format nil "\" ~A YAML Parser — Futumura Projector Demo\"" (cn name)))
+     (echo "\"════════════════════════════════════════════════════\"")
+     (echo "")
+     (echo "\"  System:  $(uname -s) $(uname -m)\"")
+     (echo "\"  Host:    $(hostname 2>/dev/null || echo unknown)\"")
+     (echo "\"  Date:    $(date)\"")
+     (echo "")))
+
+(defun build-check-dep (dep &optional ver-cmd)
+  (let ((vcmd (or ver-cmd (format nil "~A --version 2>&1 | head -1" dep))))
+    `(if (cmd? ,dep)
+       (echo ,(format nil "\"  ✓ ~A $(~A)\"" dep vcmd))
+       (progn
+         (echo ,(format nil "'  ✗ ~A not found'" dep))
+         (echo ,(format nil "'    Install: ~A'" (hint dep)))
+         (set "fail" "1")))))
+
+(defun build-check-file (path fix)
+  `(if (file? ,path)
+     (echo ,(format nil "\"  ✓ ~A ($(wc -l < ~A) lines)\"" path path))
+     (progn
+       (echo ,(format nil "'  ✗ ~A not found'" path))
+       (echo ,(format nil "'    ~A'" fix))
+       (set "fail" "1"))))
+
+(defun build-check-dir (path fix)
+  `(if (dir? ,path)
+     (echo ,(format nil "\"  ✓ ~A/ ($(find ~A -name '*.json' | wc -l) tests)\"" path path))
+     (progn
+       (echo ,(format nil "'  ✗ ~A/ not found'" path))
+       (echo ,(format nil "'    ~A'" fix))
+       (set "fail" "1"))))
+
+(defun build-do-check (deps ver-cmd src ts &optional spec)
+  `(fn "do_check"
+     (echo "'Checking prerequisites...'")
+     (echo "")
+     (local "fail" "0")
+     ,@(mapcar (lambda (d) (build-check-dep d ver-cmd)) deps)
+     ,(build-check-file src "Run: sbcl --load build-yaml.lisp --quit")
+     ,@(when spec
+         `(,(build-check-file spec "Check spec/ directory")))
+     ,(build-check-dir ts "Run: git clone https://github.com/yaml/yaml-test-suite.git")
+     (echo "")
+     (when "[ $fail -ne 0 ]"
+       (echo "'Prerequisites missing. See above for install instructions.'")
+       (exit "1"))
+     (echo "'All prerequisites satisfied.'")
+     (echo "")))
+
+(defun build-do-build (cmd cmd-darwin cmd-linux bin bd)
+  `(fn "do_build"
+     (echo "'Building...'")
+     (mkdir ,bd)
+     ,(if (and cmd-darwin cmd-linux)
+        `(progn
+           (exec ,(format nil "if [ \"$(uname)\" = \"Darwin\" ]; then"))
+           (exec ,(format nil "  ~A" cmd-darwin))
+           (exec "else")
+           (exec ,(format nil "  ~A" cmd-linux))
+           (exec "fi"))
+        `(exec ,(or cmd cmd-darwin cmd-linux)))
+     (echo "'  ✓ Build complete'")
+     (echo "")))
+
+(defun build-do-test (runner ts name slow timeout pipe test-note)
+  (let* ((to (or timeout "1"))
+         (run-err (if pipe
+                      (format nil "cat \"$f\" | timeout ~A ~A >/dev/null 2>&1" to runner)
+                      (format nil "timeout ~A ~A \"$f\" >/dev/null 2>&1" to runner))))
+    `(fn "do_test"
+       ,@(when slow
+           `((echo ,(format nil "'⚠  ~A'" slow))
+             (echo "")))
+       (echo "'Running JSON test suite...'")
+       (exec ,(format nil "echo \"  Started: $(date)\""))
+       (echo "")
+       (set "pass" "0")
+       (set "fail" "0")
+       (set "skip" "0")
+       (set "total" "0")
+       (exec "start_time=$(date +%s%N 2>/dev/null || date +%s)")
+       (for "f" ,(format nil "~A/y_*.json" ts)
+         (exec "[ -f \"$f\" ] || continue")
+         (incr "total")
+         (exec ,(format nil "printf '\\r\\033[K  %d: %s' \"$total\" \"$(basename \"$f\")\""))
+         (exec ,(format nil "rc=0; (~A) || rc=$?" run-err))
+         (exec "[ $rc -eq 0 ] && pass=$((pass+1)) || fail=$((fail+1))"))
+       (for "f" ,(format nil "~A/n_*.json" ts)
+         (exec "[ -f \"$f\" ] || continue")
+         (incr "total")
+         (exec ,(format nil "printf '\\r\\033[K  %d: %s' \"$total\" \"$(basename \"$f\")\""))
+         (exec ,(format nil "rc=0; (~A) || rc=$?" run-err))
+         (exec "[ $rc -ne 0 ] && pass=$((pass+1)) || fail=$((fail+1))"))
+       (for "f" ,(format nil "~A/i_*.json" ts)
+         (exec "[ -f \"$f\" ] || continue")
+         (incr "total")
+         (incr "skip"))
+       (printf "'\\r\\033[K'")
+       (exec "end_time=$(date +%s%N 2>/dev/null || date +%s)")
+       (exec "if [ ${#start_time} -gt 10 ]; then elapsed=$(( (end_time - start_time) / 1000000 )); unit=ms; else elapsed=$((end_time - start_time)); unit=s; fi")
+       (echo "\"════════════════════════════════════════════════════\"")
+       (echo ,(format nil "\" ~A: $pass / $total passed  ($fail failed, $skip impl-defined)  ${elapsed}${unit}\"" (cn name)))
+       (echo "\"════════════════════════════════════════════════════\"")
+       (echo "")
+       ,@(when test-note
+           `((echo ,(format nil "'~A'" test-note))
+             (echo ""))))))
+
+(defun build-dispatch (name comp)
+  `(case "\"${1:-}\""
+     ("--help|-h"
+       (exec "sed -n '/^# Source:/,/^# ═/{/^# ═/!s/^# //p}' \"$0\""))
+     ("--check"
+       (call "show_system")
+       (call "do_check"))
+     ,@(when comp
+         `(("--build"
+            (call "show_system")
+            (call "do_check")
+            (call "do_build"))))
+     ("--test"
+       (call "show_system")
+       (call "do_test"))
+     ("\"\"" 
+       (call "show_system")
+       (call "do_check")
+       ,@(when comp '((call "do_build")))
+       (call "do_test"))
+     ("*"
+       (echo "\"Unknown: $1\" >&2")
+       (exit "1"))))
+
+;;; ── Main: spec → AST → bash ─────────────────────────────────
+
+(defun build-script-ast (tgt body)
+  "Build complete shell AST for one target."
+  (let* ((name   (car tgt))
+         (props  (cdr tgt))
+         (file   (prop1 'file props))
+         (deps   (prop 'deps props))
+         (comp   (compiled-p props))
+         (cmd    (prop1 'compile props))
+         (cmd-d  (prop1 'compile-darwin props))
+         (cmd-l  (prop1 'compile-linux props))
+         (interp (prop1 'interp props))
+         (runcmd (prop1 'run props))
+         (vercmd (prop1 'version props))
+         (spec   (prop1 'spec props))
+         (slow   (prop1 'slow props))
+         (to     (prop1 'timeout props))
+         (pipe   (prop1 'pipe-input props))
+         (tnote  (prop1 'test-note body))
+         (ts     (or (prop1 'test-suite body) "yaml-test-suite"))
+         (gd     (or (prop1 'gen-dir body) "gen"))
+         (bd     (or (prop1 'bin-dir body) "bin"))
+         (src    (format nil "~A/~A" gd file))
+         (bin    (format nil "~A/~A" bd (ln name)))
+         (runner (cond (runcmd (sv runcmd src bin bd))
+                       (comp bin)
+                       (t (format nil "~A ~A" interp src))))
+         (build-cmd   (when cmd (sv cmd src bin bd)))
+         (build-cmd-d (when cmd-d (sv cmd-d src bin bd)))
+         (build-cmd-l (when cmd-l (sv cmd-l src bin bd))))
+    `(progn
+       ,(build-header name src spec (when comp bin))
+       (blank)
+       ,(build-show-system name)
+       (blank)
+       ,(build-do-check deps vercmd src ts spec)
+       (blank)
+       ,@(when comp (list (build-do-build build-cmd build-cmd-d build-cmd-l bin bd)))
+       ,@(when comp '((blank)))
+       ,(build-do-test runner ts name slow to pipe tnote)
+       (blank)
+       ,(build-dispatch name comp))))
+
+(defun build-all-ast (tgt-names)
+  "Build the regression runner — runs all build scripts, collects results."
+  `(progn
+     (comment "════════════════════════════════════════════════════════════════")
+     (comment "build-all.sh — Futumura YAML Projector — Full Regression Run")
+     (comment "")
+     (comment "Projected from build-spec.scm by project-build.lisp")
+     (comment "Runs all language targets and summarises pass/fail counts.")
+     (comment "════════════════════════════════════════════════════════════════")
+     (blank)
+     (exec "set -uo pipefail")
+     (exec "cd \"$(dirname \"$0\")\"")
+     (blank)
+     ;; ── header ──
+     (fn "show_header"
+       (echo "\"\"")
+       (echo "\"════════════════════════════════════════════════════════════════\"")
+       (echo "\" Futumura YAML Projector — Full Regression Run\"")
+       (echo "\"════════════════════════════════════════════════════════════════\"")
+       (echo "\"  System:  $(uname -s) $(uname -m)\"")
+       (echo "\"  Host:    $(hostname 2>/dev/null || echo unknown)\"")
+       (echo "\"  Date:    $(date)\"")
+       (echo ,(format nil "\"  Targets: ~A\"" (length tgt-names)))
+       (echo "\"\""))
+     (blank)
+     ;; ── run one target, capture its result line ──
+     (fn "run_target"
+       (local "name" "$1")
+       (local "mode" "\"${2:-all}\"")
+       (local "script" "\"./build-json-${name}.sh\"")
+       (exec "local pass=0 fail=0 total=0 elapsed='' status='OK'")
+       (exec "if [ ! -f \"$script\" ]; then")
+       (exec "  printf '  %-14s  %-30s\\n' \"$name\" 'MISSING build script'")
+       (exec "  return")
+       (exec "fi")
+       (exec "local out")
+       (exec "if [ \"$mode\" != '--test' ]; then")
+       (exec "  printf '  %-14s  building...\\r' \"$name\"")
+       (exec "  bash \"$script\" --build 2>&1 | tail -1 | grep -q 'Build complete' && true || true")
+       (exec "fi")
+       (exec "if [ \"$mode\" = '--build' ]; then")
+       (exec "  printf '  %-14s  built OK\\n' \"$name\"")
+       (exec "  return")
+       (exec "fi")
+       (exec "printf '  %-14s  testing... \\r' \"$name\"")
+       (exec "out=$(bash \"$script\" --test 2>&1) || true")
+       (exec "pass=$(echo  \"$out\" | grep -oP '\\d+(?= /)' | tail -1 || echo 0)")
+       (exec "total=$(echo \"$out\" | grep -oP '(?<= / )\\d+' | tail -1 || echo 0)")
+       (exec "elapsed=$(echo \"$out\" | grep -oP '\\d+(ms|s)' | tail -1 || echo '?')")
+       (exec "fail=$((total - pass))")
+       (exec "[ \"$fail\" -gt 0 ] && status='FAIL' || status='OK'")
+       (exec "printf '  %-14s  %3d / %3d  (%3d failed)  %8s  %s\\n' \"$name\" \"$pass\" \"$total\" \"$fail\" \"$elapsed\" \"$status\"")
+       (exec "echo \"$pass $total\" >> \"$tmp\""))
+     (blank)
+     ;; ── main ──
+     (exec "tmp=$(mktemp)")
+     (exec "trap 'rm -f \"$tmp\"' EXIT")
+     (exec "mode=\"${1:-all}\"")
+     (call "show_header")
+     (echo "\"  Mode: ${mode}  (use --test to skip builds, --build to build only)\"")
+     (echo "\"  Running all targets — this will take several minutes (bash/erlang/powershell are slow)\"")
+     (echo "\"\"")
+     (echo "\"  Target          Pass / Total   Failed     Time    Status\"")
+     (echo "\"  ──────────────────────────────────────────────────────────\"")
+     ,@(mapcar (lambda (n)
+                 `(exec ,(format nil "run_target ~A \"$mode\"" (ln n))))
+               tgt-names)
+     (echo "\"  ──────────────────────────────────────────────────────────\"")
+     (blank)
+     ;; ── totals ──
+     (exec "total_pass=0; total_total=0")
+     (exec "while read p t; do total_pass=$((total_pass+p)); total_total=$((total_total+t)); done < \"$tmp\"")
+     (exec "total_fail=$((total_total - total_pass))")
+     (echo "\"\"")
+     (echo "\"════════════════════════════════════════════════════════════════\"")
+     (exec ,(format nil "printf '  Total: ~A targets   %d / %d passed   (%d failed)\\n' \"$total_pass\" \"$total_total\" \"$total_fail\"" (length tgt-names)))
+     (echo "\"════════════════════════════════════════════════════════════════\"")
+     (echo "\"\"")))
+
+(defun project-all ()
+  (let* ((spec (read-spec "build-spec-json.scm"))
+         (body (cddr spec))
+         (tgts (targets spec))
+         (names (mapcar #'car tgts)))
+    (format t "; Projecting JSON build scripts from build-spec-json.scm~%")
+    (dolist (tgt tgts)
+      (let* ((ast (build-script-ast tgt body))
+             (path (format nil "build-json-~A.sh" (ln (car tgt)))))
+        (emit-shell ast path)))
+    ;; emit the regression runner
+    (let ((ast (build-all-ast names)))
+      (emit-shell ast "build-json-all.sh"))
+    (format t "; Done. ~D scripts + build-json-all.sh projected.~%" (length tgts))))
+
+(project-all)

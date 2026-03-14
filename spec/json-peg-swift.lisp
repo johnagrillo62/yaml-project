@@ -13,7 +13,8 @@
     "if" "import" "in" "init" "inout" "internal" "is" "let" "nil" "operator"
     "private" "protocol" "public" "repeat" "return" "self" "static" "struct"
     "subscript" "super" "switch" "throw" "throws" "true" "try" "typealias"
-    "var" "where" "while"))
+    "var" "where" "while"
+    "char" "string"))
 (def-tgt "keyword-prefix" "r_")
 
 ;;; ── Closure wrapping ──

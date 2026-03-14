@@ -11,7 +11,7 @@
 (def-tgt "keywords"
   '("not" "and" "or" "class" "switch" "case" "default" "break" "return"
     "if" "else" "while" "for" "do" "new" "delete" "true" "false"
-    "struct" "enum" "namespace" "template" "auto"))
+    "struct" "enum" "namespace" "template" "auto" "char" "string" "int" "float"))
 (def-tgt "keyword-prefix" "r_")
 
 ;;; ── Closure wrapping ──
@@ -119,7 +119,7 @@
 #include <algorithm>
 #include <cstring>
 
-namespace yaml {")
+namespace json {")
 
 ;;; ── Runtime sections ──
 
@@ -240,7 +240,7 @@ inline Result behind(Input inp, PFn f) { if(inp.pos==0) return fail(inp,\"bh\");
 inline Result sol(Input inp) { return inp.col==0 ? ok(inp) : fail(inp,\"sol\"); }
 inline Result eof_ok(Input inp) { return at_eof(inp) ? ok(inp) : fail(inp,\"eof\"); }"
 
-;; YAML extensions
+;; JSON extensions
 ))
 
 ;;; ── API ──
@@ -264,7 +264,7 @@ void print_ast(const AST& n, int d=0) {
     else { std::cout<<n->type<<std::endl; for(auto& c:n->children) print_ast(c,d+1); }
 }")
 
-(def-tgt "namespace-close" "} // namespace yaml")
+(def-tgt "namespace-close" "} // namespace json")
 
 ;;; ── Main ──
 
@@ -274,28 +274,10 @@ void print_ast(const AST& n, int d=0) {
     if(argc>1) { std::ifstream f(argv[1]); if(!f){std::cerr<<\"Cannot open \"<<argv[1]<<std::endl;return 1;}
         std::ostringstream ss; ss<<f.rdbuf(); text=ss.str(); }
     else { std::ostringstream ss; ss<<std::cin.rdbuf(); text=ss.str(); }
-    auto result=yaml::parse(text);
+    auto result=json::parse(text);
     if(!result.success) { std::cerr<<\"FAIL @\"<<result.pos<<\": \"<<result.error<<std::endl; return 1; }
     std::cout<<\"OK: \"<<result.pos<<\" chars\"<<std::endl;
-    yaml::print_ast(result.ast);
-    // Also demonstrate native API
-    auto val = yaml::load(text);
-    std::cout<<\"\\n── Native API ──\"<<std::endl;
-    if (val.tag == yaml::YamlValue::Map) {
-        for (auto& [k,v] : val.m) {
-            std::cout << k << \": \";
-            switch(v.tag) {
-                case yaml::YamlValue::Null:  std::cout<<\"null\"; break;
-                case yaml::YamlValue::Bool:  std::cout<<(v.b?\"true\":\"false\"); break;
-                case yaml::YamlValue::Int:   std::cout<<v.i; break;
-                case yaml::YamlValue::Float: std::cout<<v.f; break;
-                case yaml::YamlValue::Str:   std::cout<<'\"'<<v.s<<'\"'; break;
-                case yaml::YamlValue::Map:   std::cout<<\"{map, \"<<v.m.size()<<\" keys}\"; break;
-                case yaml::YamlValue::Seq:   std::cout<<\"[seq, \"<<v.v.size()<<\" items]\"; break;
-            }
-            std::cout << std::endl;
-        }
-    }
+    json::print_ast(result.ast);
     return 0;
 }")
 
