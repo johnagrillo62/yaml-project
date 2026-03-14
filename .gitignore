@@ -1,1 +1,32 @@
 bin
+# Emacs
+*~
+\#*\#
+.\#*
+*.elc
+
+# Build artifacts
+*.class
+*.bin
+bin/
+
+# Compiled / generated binaries
+*.o
+*.a
+*.so
+*.exe
+
+# Lisp
+*.fasl
+*.fas
+*.lib
+*.dx32fsl
+*.dx64fsl
+*.lx32fsl
+*.lx64fsl
+*.ufasl
+
+# OS
+.DS_Store
+Thumbs.db
+
